@@ -106,6 +106,10 @@ cat version.txt
   bundle that has `NSMicrophoneUsageDescription`.
 - `Atomic` from `Synchronization` is noncopyable. A render closure cannot capture it directly, so
   the engines keep atomics in a small final class.
+- Mic calibration: no maker publishes a generic file for UMIK-1/2, EMM-6, UMM-6, ECM8000 or XREF 20.
+  Their files are per serial number, so the user imports them. The only built-in curves are the
+  iPhone 17 Pro and 18 Pro, read by eye from Faber Acoustical's published graphs (30 Hz–5 kHz).
+  Do not add a built-in curve without a named published source.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

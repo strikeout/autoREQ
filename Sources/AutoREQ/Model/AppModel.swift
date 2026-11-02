@@ -58,6 +58,13 @@ struct PersistedState: Codable {
     var loopbackMasterDBStored: Double?
     var loopbackTrimsStored: [String: Double]?
     var correctionStrengthStored: Double?
+    var micCalibrationsStored: [MicCalibration]?
+    var micCalibrationByDeviceStored: [String: String]?
+
+    /// Calibration files that the user imported.
+    var micCalibrations: [MicCalibration] { get { micCalibrationsStored ?? [] } set { micCalibrationsStored = newValue } }
+    /// The chosen calibration name for each mic device UID.
+    var micCalibrationByDevice: [String: String] { get { micCalibrationByDeviceStored ?? [:] } set { micCalibrationByDeviceStored = newValue } }
 
     /// The master volume after the correction, in dB.
     var loopbackMasterDB: Double { get { loopbackMasterDBStored ?? 0 } set { loopbackMasterDBStored = newValue } }
@@ -161,7 +168,7 @@ final class AppModel {
                 self.micRMSDB = u.micRMSDB
                 self.status = u.status
                 self.stability = u.stability
-                if let r = u.response { self.live = r }
+                if let r = u.response { self.live = self.activeMicCalibration.map(r.removing(mic:)) ?? r }
                 if self.autoCapturing && u.stability >= 1 {
                     self.autoCapturing = false
                     self.takeSnapshot()
@@ -208,6 +215,43 @@ final class AppModel {
         guard await startEngine() else { return }
         autoCapturing = true
         setNoise(channels)
+    }
+
+    // MARK: Mic calibration
+
+    var allMicCalibrations: [MicCalibration] { MicCalibration.builtIn + state.micCalibrations }
+
+    /// The calibration of the current mic device, if one is chosen.
+    var activeMicCalibration: MicCalibration? {
+        guard let uid = state.micDeviceUID, let name = state.micCalibrationByDevice[uid] else { return nil }
+        return allMicCalibrations.first { $0.name == name }
+    }
+
+    func selectMicCalibration(_ name: String?) {
+        guard let uid = state.micDeviceUID else { return }
+        state.micCalibrationByDevice[uid] = name
+    }
+
+    /// Imports REW / miniDSP calibration files and selects the last one for the current mic.
+    func importMicCalibration() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose a mic calibration file, for example the file from miniDSP for your mic's serial number."
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            let name = url.deletingPathExtension().lastPathComponent
+            guard let text = (try? String(contentsOf: url, encoding: .utf8)) ?? (try? String(contentsOf: url, encoding: .isoLatin1)),
+                  let cal = MicCalibration.parse(text, name: name)
+            else { engineError = "\(url.lastPathComponent) is not a calibration file this app can read."; continue }
+            state.micCalibrations.removeAll { $0.name == cal.name }
+            state.micCalibrations.append(cal)
+            selectMicCalibration(cal.name)
+        }
+    }
+
+    func removeMicCalibration(_ name: String) {
+        state.micCalibrations.removeAll { $0.name == name }
+        for (k, v) in state.micCalibrationByDevice where v == name { state.micCalibrationByDevice[k] = nil }
     }
 
     // MARK: Snapshots

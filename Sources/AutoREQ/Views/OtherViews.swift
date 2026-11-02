@@ -129,6 +129,7 @@ struct SettingsView: View {
                         ForEach(0..<(model.micDevice?.inputChannels ?? 1), id: \.self) { Text("Ch \($0 + 1)").tag($0) }
                     }
                     HStack { Text("Mic Level"); MicMeter(peak: model.micPeakDB, rms: model.micRMSDB).frame(height: 8) }
+                    MicCalibrationRow()
                 }
                 Section("Speaker Output") {
                     Picker("Device", selection: $model.state.outputDeviceUID) {
@@ -262,6 +263,52 @@ struct LoopbackVolume: View {
             Slider(value: value, in: range, step: step) { editing in if !editing { commit() } }
             Text(text).monospacedDigit().frame(width: 70, alignment: .trailing)
             Button("↩", action: reset).buttonStyle(.borderless)
+        }
+    }
+}
+
+/// Chooses the calibration of the current mic, and imports calibration files.
+struct MicCalibrationRow: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let active = model.activeMicCalibration
+        VStack(alignment: .leading, spacing: 6) {
+            Picker("Calibration", selection: Binding(get: { active?.name }, set: { model.selectMicCalibration($0) })) {
+                Text("None").tag(String?.none)
+                let typical = model.allMicCalibrations.filter(\.isTypical)
+                let files = model.allMicCalibrations.filter { !$0.isTypical }
+                if !files.isEmpty {
+                    Section("Imported files") { ForEach(files) { Text($0.name).tag(String?.some($0.name)) } }
+                }
+                if !typical.isEmpty {
+                    Section("Typical curves") { ForEach(typical) { Text($0.name).tag(String?.some($0.name)) } }
+                }
+            }
+            .disabled(model.state.micDeviceUID == nil)
+            HStack {
+                Button("Import calibration file…") { model.importMicCalibration() }
+                if let a = active, !a.isTypical {
+                    Button("Remove", role: .destructive) { model.removeMicCalibration(a.name) }
+                }
+            }
+            if model.micDevice?.name.localizedCaseInsensitiveContains("iPhone") == true {
+                Text("iPhone mic over Continuity: choose Mic Mode → Standard in the menu bar while AutoREQ measures. Voice Isolation removes steady noise, so it ruins a pink-noise measurement. Apple does not say if Standard turns off all processing, so check a reading against a known mic if you can.")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if let a = active {
+                let range = a.frequencyRange.map { String(format: "%.0f Hz – %.0f Hz", $0.lowerBound, $0.upperBound) } ?? ""
+                Text([range, "\(a.points.count) points", a.serial.map { "serial \($0)" }, a.sensitivityDB.map { String(format: "sens %.2f dB", $0) }]
+                    .compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption).foregroundStyle(.secondary)
+                if a.isTypical {
+                    Text("A typical curve is an average of the model, not your unit. Units can differ by several dB above 10 kHz. Use the file for your serial number if the maker gives one. Source: \(a.source)")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            } else {
+                Text("The calibration applies to new measurements from this mic. Snapshots that you took before keep their data.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 }

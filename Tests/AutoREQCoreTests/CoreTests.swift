@@ -118,3 +118,34 @@ import Testing
     #expect(back?.response.latencySamples == 77)
     #expect(abs((back?.response.magnitudeDB[100] ?? 0) - 3) < 0.01)
 }
+
+@Test func micCalibrationParsesAMiniDSPStyleFile() {
+    let text = """
+    "Sens Factor =-1.378dB, AGain =18dB, SERNO: 7001234"
+    * a comment
+    10.054\t-1.25
+    100.0 0.10
+    1000,0.00
+    10000\t1.50\t-12.0
+    20000 -2.0
+    """
+    let cal = MicCalibration.parse(text, name: "UMIK-1")
+    #expect(cal?.points.count == 5)
+    #expect(cal?.sensitivityDB == -1.378)
+    #expect(cal?.serial == "7001234")
+    #expect(abs((cal?.gain(at: 3162.28) ?? 0) - 0.75) < 0.01)
+    #expect(cal?.gain(at: 5) == -1.25)
+
+    var r = Response.flat()
+    r = r.removing(mic: cal!)
+    #expect(abs(r.magnitudeDB[FrequencyGrid.index(of: 10_000)] + 1.5) < 0.05)
+    #expect(MicCalibration.parse(cal!.encode(), name: "x")?.points.count == 5)
+}
+
+@Test func builtInMicCurvesAreZeroAt1kHzAndFlatAbove5k() {
+    for cal in MicCalibration.builtIn {
+        #expect(cal.isTypical)
+        #expect(abs(cal.gain(at: 1000)) < 0.01)
+        #expect(cal.gain(at: 12_000) == cal.gain(at: 5000))
+    }
+}
