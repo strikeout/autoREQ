@@ -14,13 +14,16 @@ enum Screenshots {
         let model = AppModel(demo: demoState())
         let session = CalibrationSession(app: model)
         session.stage = .results
-        let shots: [(String, AppSection)] = [("measure", .measure), ("calibration-results", .calibrate), ("loopback", .loopback), ("target-curve", .target)]
+        model.live = model.state.snapshots.first?.response
+        let shots: [(String, AppSection)] = [("measure", .measure), ("calibration-results", .calibrate), ("room-analysis", .room),
+                                             ("loopback", .loopback), ("target-curve", .target)]
         for (name, section) in shots {
             let root = ContentView(section: section, session: session)
                 .environment(model)
                 .preferredColorScheme(.dark)
                 .tint(.yellow)
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
+            // The room analysis page is long, so its image is taller.
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: section == .room ? 1000 : 860),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
             window.title = "AutoREQ"
@@ -75,9 +78,24 @@ enum Screenshots {
             }
             return r
         }
-        let left = room([.init(type: .highPass, frequency: 48, q: 0.7), .init(frequency: 68, gainDB: 6, q: 5), .init(frequency: 115, gainDB: -10, q: 6),
-                         .init(frequency: 190, gainDB: 4, q: 3), .init(frequency: 420, gainDB: -3, q: 2), .init(frequency: 2400, gainDB: 2, q: 1.5),
-                         .init(type: .highShelf, frequency: 12_000, gainDB: -3, q: 0.7)], latency: 4800, dips: [115, 420])
+        let leftBands: [EQBand] = [.init(type: .highPass, frequency: 48, q: 0.7), .init(frequency: 68, gainDB: 6, q: 5), .init(frequency: 115, gainDB: -10, q: 6),
+                                   .init(frequency: 190, gainDB: 4, q: 3), .init(frequency: 420, gainDB: -3, q: 2), .init(frequency: 2400, gainDB: 2, q: 1.5),
+                                   .init(type: .highShelf, frequency: 12_000, gainDB: -3, q: 0.7)]
+        var left = room(leftBands, latency: 4800, dips: [115, 420])
+
+        // The impulse response of the left speaker: the direct sound, six early reflections and a diffuse tail.
+        var x = [Double](repeating: 0, count: 32_768 + 480)
+        x[480] = 1
+        for (ms, g) in [(1.9, -0.45), (4.6, 0.32), (7.8, 0.25), (11.5, -0.2), (17.0, 0.14), (23.5, 0.1)] { x[480 + Int(ms * 48)] += g }
+        for i in (480 + 1200)..<x.count {
+            let t = Double(i - 480) / sr
+            x[i] += 0.03 * (random() - 0.5) * exp(-6.91 * t / 0.35)
+        }
+        for b in leftBands + [EQBand(type: .lowPass, frequency: 18_000, q: 0.7)] {
+            var st = BiquadState(b.coefficients(sampleRate: sr))
+            x = x.map { st.process($0) }
+        }
+        left.impulse = ImpulseResponse(samples: x.map { Float($0 + 2e-5 * (random() - 0.5)) }, sampleRate: sr, zeroIndex: 480)
         let right = room([.init(type: .highPass, frequency: 48, q: 0.7), .init(frequency: 72, gainDB: 5, q: 5), .init(frequency: 130, gainDB: -8, q: 5),
                           .init(frequency: 210, gainDB: 5, q: 3), .init(frequency: 900, gainDB: -2, q: 2),
                           .init(type: .highShelf, frequency: 12_000, gainDB: -2, q: 0.7)], latency: 4806, dips: [130])

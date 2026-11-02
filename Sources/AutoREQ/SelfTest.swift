@@ -32,7 +32,16 @@ enum SelfTest {
                    rate, r.latencySamples, mag, spread, coh, u.micRMSDB, u.stability))
         let probes = [30.0, 50, 100, 1000, 5000, 10_000, 15_000, 18_000]
         say("dB at " + probes.map { String(format: "%.0f Hz: %.2f", $0, r.magnitudeDB[FrequencyGrid.index(of: $0)]) }.joined(separator: ", "))
-        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9
+        // A loop-through device has a single peak at lag 0 and no reflections.
+        var irOK = false
+        if let ir = r.impulse, let peak = ir.samples.indices.max(by: { abs(ir.samples[$0]) < abs(ir.samples[$1]) }) {
+            let refl = RoomAnalysis.reflections(ir)
+            say(String(format: "impulse peak %.2f at %.2f ms, %d reflections", ir.samples[peak], ir.timeMs(peak), refl.count))
+            irOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty
+        } else {
+            say("no impulse response")
+        }
+        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK
         say(ok ? "PASS" : "FAIL")
         return ok ? 0 : 1
     }

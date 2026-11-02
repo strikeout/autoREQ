@@ -26,6 +26,8 @@ public struct Response: Codable, Hashable, Sendable {
     public var coherence: [Double]
     public var latencySamples: Int
     public var sampleRate: Double
+    /// The impulse response of a live measurement. Calculated and imported responses have none.
+    public var impulse: ImpulseResponse?
 
     public init(magnitudeDB: [Double], phaseDeg: [Double], coherence: [Double], latencySamples: Int = 0, sampleRate: Double = 48_000) {
         self.magnitudeDB = magnitudeDB
@@ -60,6 +62,7 @@ public struct Response: Codable, Hashable, Sendable {
     /// Returns a copy that adds the response of `filters` (magnitude and phase).
     public func applying(_ filters: [BiquadCoefficients], gainDB: Double = 0, delaySamples: Double = 0, inverted: Bool = false) -> Response {
         var r = self
+        r.impulse = nil
         for (i, f) in FrequencyGrid.frequencies.enumerated() {
             var h = complex(i)
             for c in filters { h = h * c.response(at: f, sampleRate: sampleRate) }
@@ -74,6 +77,7 @@ public struct Response: Codable, Hashable, Sendable {
     public static func sum(_ items: [Response]) -> Response? {
         guard let first = items.first else { return nil }
         var out = first
+        out.impulse = nil
         for i in 0..<FrequencyGrid.count {
             let f = FrequencyGrid.frequencies[i]
             var h = Complex.zero
@@ -97,6 +101,7 @@ public struct Response: Codable, Hashable, Sendable {
         let w = weights ?? Array(repeating: 1, count: items.count)
         let total = w.reduce(0, +)
         var out = first
+        out.impulse = nil
         for i in 0..<FrequencyGrid.count {
             var p = 0.0, c = 0.0
             for (k, r) in items.enumerated() {

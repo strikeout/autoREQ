@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.1.0
+
+- The new Room Analysis screen shows the impulse response and the energy-time curve of a measurement.
+- The screen lists the reflections in the first 100 ms with the delay, the level and the extra path length.
+- The screen lists the room modes from 15 Hz to 300 Hz with the frequency, the level, the Q and the T60.
+- Each live measurement and snapshot now keeps its impulse response.
+
 ## v1.0.1
 
 - The auto scale of the response chart now shows a 60 dB window below the loudest point. Before, a subwoofer roll-off compressed all the curves into a thin strip.

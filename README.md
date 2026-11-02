@@ -19,6 +19,11 @@ The results page shows each channel after the correction, with the target curve 
 
 ![The calibration results with the corrected response of each channel](docs/screenshots/calibration-results.png)
 
+The Room Analysis screen shows the impulse response and the energy-time curve. It lists the
+reflections and the room modes.
+
+![The Room Analysis screen with six reflections and one bass mode](docs/screenshots/room-analysis.png)
+
 The Loopback screen sets the devices, the volume and the trim of each speaker.
 
 ![The Loopback screen with the volume controls](docs/screenshots/loopback.png)
@@ -35,6 +40,10 @@ The Target Curve screen shows the selected preset or your custom curve.
 - **Calibrate:** A guided procedure measures each speaker at one or more mic positions. The app
   then calculates the crossover, the level, the delay, the polarity and up to 48 EQ filters for
   each speaker.
+- **Room analysis:** The app shows the impulse response and the energy-time curve (ETC) of a
+  measurement. It lists the reflections in the first 100 ms with the delay, the level and the
+  extra path length. It also lists the room modes from 15 Hz to 300 Hz with the frequency, the
+  level, the Q and the decay time (T60).
 - **Target curves:** Five preset curves are available. You can also make a custom curve from
   points.
 - **Loopback:** The app captures the system audio from a virtual audio device. It applies the
@@ -116,6 +125,20 @@ open -W build/AutoREQ.app --args --screenshots "$PWD/docs/screenshots"
 4. Click **Start Measurement**, and follow the steps on the screen.
 5. On the results page, click **Apply to loopback**.
 
+### Analyze the room
+
+1. Measure a speaker on the **Measure** screen for at least 5 s.
+2. Click **Take Snapshot**.
+3. Open **Room Analysis**, and select the snapshot.
+4. Select a time span for the charts.
+
+A reflection 1 ms to 5 ms after the direct sound often comes from the desk, the floor or a near
+wall. Absorption or a different speaker position can decrease it. EQ cannot remove a reflection.
+
+The T60 from Q is the decay time of a resonance with the measured Q. The measured T60 comes from
+the impulse response in a 1/3-octave band. A mode with a long decay sounds boomy. EQ decreases
+its level, but the room keeps some of the decay.
+
 ### Use the loopback correction
 
 1. Install a virtual audio device, for example BlackHole 2ch.
@@ -162,6 +185,10 @@ or `FAIL`.
   position when the drift becomes too large, and this can make a click.
 - The calibration does not include a phase correction pass or extra listening areas.
 - The crossover is always a 4th-order Linkwitz-Riley filter.
+- The impulse response is about 0.7 s long. The analysis cannot measure a decay longer than
+  about 0.5 s.
+- Only live measurements have an impulse response. An imported CSV file has none. For such a
+  file, the app shows no reflections and no measured decay.
 
 ## License
 

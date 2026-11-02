@@ -47,6 +47,9 @@ final class MeasurementEngine: @unchecked Sendable {
 
     // State owned by `queue`.
     private let analyzer: TransferAnalyzer
+    private let impulseAnalyzer: ImpulseAnalyzer
+    private var lastImpulse: ImpulseResponse?
+    private var ticks = 0
     private var refOffset: Int?
     private var lastDelaySearch = Date.distantPast
     private var noiseStartCount = 0
@@ -94,6 +97,7 @@ final class MeasurementEngine: @unchecked Sendable {
         self.sampleRate = output.sampleRate
         analyzer = TransferAnalyzer(fftSize: 16_384, sampleRate: output.sampleRate, averaging: averaging)
         analyzer.frameInterval = 0.1
+        impulseAnalyzer = ImpulseAnalyzer(sampleRate: output.sampleRate)
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + 0.1, repeating: 0.1)
         t.setEventHandler { [weak self] in self?.tick() }
@@ -122,10 +126,16 @@ final class MeasurementEngine: @unchecked Sendable {
     func setAveraging(_ a: Averaging) { queue.async { self.analyzer.averaging = a } }
 
     /// Clears the averages. The delay stays, because it does not change while the engines run.
-    func resetAverages() { queue.async { self.analyzer.reset(); self.history = []; self.stableFrames = 0 } }
+    func resetAverages() { queue.async { self.resetAnalyzers(); self.history = []; self.stableFrames = 0 } }
+
+    private func resetAnalyzers() {
+        analyzer.reset()
+        impulseAnalyzer.reset()
+        lastImpulse = nil
+    }
 
     private func restart() {
-        analyzer.reset()
+        resetAnalyzers()
         history = []
         stableFrames = 0
         failedSearches = 0
@@ -155,7 +165,17 @@ final class MeasurementEngine: @unchecked Sendable {
               let ref = refRing.read(from: mc - n + off, count: n)
         else { update.status = .findingDelay; return }
         analyzer.add(reference: ref, measured: mic)
-        let r = analyzer.response(latencySamples: -off)
+        // The impulse frame is longer than 1.2 s, so a new frame every 0.5 s is enough.
+        ticks += 1
+        let ni = impulseAnalyzer.fftSize
+        if ticks % 5 == 0,
+           let micLong = micRing.read(from: mc - ni, count: ni),
+           let refLong = refRing.read(from: mc - ni + off, count: ni) {
+            impulseAnalyzer.add(reference: refLong, measured: micLong)
+            lastImpulse = impulseAnalyzer.impulse()
+        }
+        var r = analyzer.response(latencySamples: -off)
+        r.impulse = lastImpulse
         update.response = r
         update.status = .measuring
 
@@ -180,7 +200,7 @@ final class MeasurementEngine: @unchecked Sendable {
         else { failedSearches += 1; return }
         guard hit.quality > 6 else { failedSearches += 1; return }
         let newOffset = (rc - rLen + hit.lag) - (mc - mLen)
-        if let old = refOffset, old != newOffset { analyzer.reset() }
+        if let old = refOffset, old != newOffset { resetAnalyzers() }
         refOffset = newOffset
     }
 }

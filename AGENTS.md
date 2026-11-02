@@ -120,6 +120,12 @@ cat version.txt
   microphone stays silent without an error.
 - `scripts/make-icon.swift` draws the app icon in code and writes `Resources/AppIcon.icns`.
   Edit the script and run `swift scripts/make-icon.swift` to change the icon.
+- `ImpulseAnalyzer` (in `RoomAnalysis.swift`) is separate from `TransferAnalyzer`. It uses a
+  rectangular frame of at least 1.2 s. It divides each lag t by (1 - |t| / N) to remove the
+  window error. The Hann window of `TransferAnalyzer` attenuates late lags too much for a decay
+  measurement. The engine adds an impulse frame every 5th tick (0.5 s).
+- The JSON state keeps `Response.impulse` as raw Float32 data in base64. `applying`, `sum` and
+  `powerAverage` set it to nil, because their output is no longer a measurement.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true
