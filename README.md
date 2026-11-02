@@ -7,6 +7,26 @@ AutoREQ rebuilds the software features of the Omnissiah app by Tantrum Audio in 
 an independent project. Tantrum Audio does not make, support or endorse it. AutoREQ does not control
 the Tantrum Really Mean Sub, because the USB protocol of that device is not public.
 
+## Screenshots
+
+The screenshots show a simulated room with a stereo pair and a subwoofer.
+
+The Measure screen compares the snapshots of the three speakers. It shows the magnitude, the coherence and the phase.
+
+![The Measure screen with three speaker snapshots](docs/screenshots/measure.png)
+
+The results page shows each channel after the correction, with the target curve as a dashed line.
+
+![The calibration results with the corrected response of each channel](docs/screenshots/calibration-results.png)
+
+The Loopback screen sets the devices, the volume and the trim of each speaker.
+
+![The Loopback screen with the volume controls](docs/screenshots/loopback.png)
+
+The Target Curve screen shows the selected preset or your custom curve.
+
+![The Target Curve screen with the House Flat preset](docs/screenshots/target-curve.png)
+
 ## Features
 
 - **Measure:** The app plays pink noise and shows the transfer function of the speaker. The chart
@@ -56,6 +76,16 @@ open build/AutoREQ.app
 
 The script `scripts/bundle.sh` writes the app to `build/AutoREQ.app`. Use the bundle, not
 `swift run`. macOS gives microphone access only to an app bundle.
+
+### Make the screenshots again
+
+The app can draw its main screens with the simulated room and write PNG files. This mode
+uses no audio device, and it does not change your saved settings.
+
+```bash
+./scripts/bundle.sh
+open -W build/AutoREQ.app --args --screenshots "$PWD/docs/screenshots"
+```
 
 ## Use the app
 

@@ -92,6 +92,7 @@ struct TargetCurveView: View {
             }
             .chartXScale(domain: 20...20_000, type: .log)
             .chartYScale(domain: -12...12)
+            .chartXAxis { ResponseChart.frequencyAxis }
             .frame(height: 240)
             if model.state.target.name == "Custom" {
                 VStack(alignment: .leading) {
@@ -260,7 +261,8 @@ struct LoopbackVolume: View {
                      reset: @escaping () -> Void, commit: @escaping () -> Void) -> some View {
         HStack {
             Text(label).frame(width: 150, alignment: .leading)
-            Slider(value: value, in: range, step: step) { editing in if !editing { commit() } }
+            let rounded = Binding(get: { value.wrappedValue }, set: { value.wrappedValue = ($0 / step).rounded() * step })
+            Slider(value: rounded, in: range) { editing in if !editing { commit() } }
             Text(text).monospacedDigit().frame(width: 70, alignment: .trailing)
             Button("↩", action: reset).buttonStyle(.borderless)
         }

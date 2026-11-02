@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.1
+
+- The auto scale of the response chart now shows a 60 dB window below the loudest point. Before, a subwoofer roll-off compressed all the curves into a thin strip.
+- The charts no longer draw curves outside the plot area.
+- The volume sliders no longer show dense tick marks.
+- The target curve chart uses the same frequency labels as the other charts.
+- The README shows screenshots of the main screens.
+
 ## v1.0.0
 
 This is the first public release of AutoREQ.

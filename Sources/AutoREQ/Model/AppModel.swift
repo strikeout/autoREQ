@@ -100,11 +100,22 @@ final class AppModel {
 
     static let palette = ["#FFC400", "#4FC3F7", "#EF5350", "#66BB6A", "#AB47BC", "#FF7043", "#26C6DA", "#D4E157"]
 
+    /// False for the demo model of the screenshot mode, so that it never writes the user's state file.
+    private let persists: Bool
+
     init() {
+        persists = true
         if let data = try? Data(contentsOf: Self.stateURL), let s = try? JSONDecoder().decode(PersistedState.self, from: data) {
             state = s
         }
         refreshDevices()
+    }
+
+    /// Makes a model that shows `demo` and saves nothing.
+    init(demo: PersistedState) {
+        persists = false
+        state = demo
+        devices = AudioDevice.all()
     }
 
     nonisolated static var stateURL: URL {
@@ -114,6 +125,7 @@ final class AppModel {
     }
 
     private func scheduleSave() {
+        guard persists else { return }
         saveTask?.cancel()
         let s = state
         saveTask = Task.detached(priority: .utility) {

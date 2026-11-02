@@ -25,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--screenshots"), i + 1 < args.count {
+            Task { @MainActor in exit(await Screenshots.run(directory: args[i + 1])) }
+        }
         if let i = args.firstIndex(of: "--selftest"), i + 1 < args.count {
             Task { @MainActor in exit(await SelfTest.run(deviceName: args[i + 1])) }
         }
@@ -51,8 +54,13 @@ enum AppSection: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @State private var section: AppSection? = .home
+    @State private var section: AppSection?
     @State private var session: CalibrationSession?
+
+    init(section: AppSection = .home, session: CalibrationSession? = nil) {
+        _section = State(initialValue: section)
+        _session = State(initialValue: session)
+    }
 
     var body: some View {
         NavigationSplitView {

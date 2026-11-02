@@ -67,7 +67,12 @@ struct ResponseChart: View {
 
     private var yDomain: ClosedRange<Double>? {
         switch scale.kind {
-        case .full: return nil
+        case .full:
+            // A 60 dB window below the loudest point. An auto scale would stretch to a sub's
+            // treble roll-off at -200 dB and flatten every other curve.
+            let top = traces.flatMap { displayed($0).magnitudeDB }.max() ?? 0
+            let t = (top / 5).rounded(.up) * 5 + 5
+            return (t - 60)...t
         case .norm24: return -24...24
         case .custom:
             let all = traces.flatMap { displayed($0).magnitudeDB }
@@ -127,6 +132,7 @@ struct ResponseChart: View {
         }
         .chartXScale(domain: xDomain, type: .log)
         .modifier(OptionalYDomain(domain: yDomain))
+        .chartPlotStyle { $0.clipped() }
         .chartXAxis { frequencyAxis }
         .chartYAxisLabel("dB")
         .chartOverlay { proxy in hover(proxy) }
@@ -160,13 +166,19 @@ struct ResponseChart: View {
         }
         .chartXScale(domain: xDomain, type: .log)
         .chartYScale(domain: -180...180)
+        .chartPlotStyle { $0.clipped() }
         .chartYAxis { AxisMarks(values: [-180, -90, 0, 90, 180]) }
         .chartXAxis { frequencyAxis }
         .chartYAxisLabel("Phase °")
         .chartOverlay { proxy in hover(proxy) }
     }
 
-    private var frequencyAxis: some AxisContent {
+    /// False in the screenshot mode, so no hover readout shows in the images.
+    static var hoverEnabled = true
+
+    private var frequencyAxis: some AxisContent { Self.frequencyAxis }
+
+    static var frequencyAxis: some AxisContent {
         AxisMarks(values: [20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000, 20_000]) { v in
             AxisGridLine()
             AxisValueLabel {
@@ -181,7 +193,7 @@ struct ResponseChart: View {
                 .onContinuousHover { phase in
                     switch phase {
                     case .active(let p):
-                        guard let plot = proxy.plotFrame else { return }
+                        guard Self.hoverEnabled, let plot = proxy.plotFrame else { return }
                         let x = p.x - geo[plot].origin.x
                         hoverF = proxy.value(atX: x, as: Double.self)
                     case .ended: hoverF = nil
