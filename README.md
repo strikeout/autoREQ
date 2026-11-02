@@ -156,6 +156,8 @@ or `FAIL`.
 ## Known limits
 
 - The input device and the output device must run at the same sample rate.
+- Set a virtual audio device to 48 kHz. At 44.1 kHz, VB-Cable reads 6 dB low at 15 kHz, and
+  the measurement and the correction are wrong in the treble.
 - The loopback path does not correct clock drift between two devices. The app resets the read
   position when the drift becomes too large, and this can make a click.
 - The calibration does not include a phase correction pass or extra listening areas.

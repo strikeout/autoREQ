@@ -17,7 +17,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 <dict>
   <key>CFBundleExecutable</key><string>AutoREQ</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>uk.local.autoreq</string>
+  <key>CFBundleIdentifier</key><string>com.thomassteinhauer.autoreq</string>
   <key>CFBundleName</key><string>AutoREQ</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
@@ -28,5 +28,11 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </dict>
 </plist>
 EOF
-codesign --force --sign - "$APP"
+# Set SIGN_IDENTITY to a "Developer ID Application" identity to sign for notarization.
+# Without it, the script makes an ad-hoc signature that runs on this Mac only.
+if [ -n "${SIGN_IDENTITY:-}" ]; then
+  codesign --force --options runtime --timestamp --entitlements Resources/AutoREQ.entitlements --sign "$SIGN_IDENTITY" "$APP"
+else
+  codesign --force --sign - "$APP"
+fi
 echo "Built $APP"

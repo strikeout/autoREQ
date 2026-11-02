@@ -110,6 +110,14 @@ cat version.txt
   Their files are per serial number, so the user imports them. The only built-in curves are the
   iPhone 17 Pro and 18 Pro, read by eye from Faber Acoustical's published graphs (30 Hz–5 kHz).
   Do not add a built-in curve without a named published source.
+- `scripts/notarize.sh` signs with the Developer ID identity in the keychain, notarizes with the
+  keychain profile `autoreq-notary` (override with `NOTARY_PROFILE`), staples, and writes
+  `build/AutoREQ.zip`. The CI release builds an ad-hoc signed zip only. After the release
+  workflow finishes, replace its asset: `gh release upload vX.Y.Z build/AutoREQ.zip --clobber`.
+- The bundle ID is `com.thomassteinhauer.autoreq`. A change of the ID makes macOS ask for
+  microphone access again.
+- The hardened runtime needs `Resources/AutoREQ.entitlements` (`device.audio-input`), or the
+  microphone stays silent without an error.
 - `scripts/make-icon.swift` draws the app icon in code and writes `Resources/AppIcon.icns`.
   Edit the script and run `swift scripts/make-icon.swift` to change the icon.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.

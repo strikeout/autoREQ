@@ -30,6 +30,8 @@ enum SelfTest {
         let coh = r.coherence[band].reduce(0, +) / Double(band.count)
         say(String(format: "rate %.0f  latency %d samples  mean %.2f dB  spread %.2f dB  coherence %.3f  mic rms %.1f dBFS  stability %.2f",
                    rate, r.latencySamples, mag, spread, coh, u.micRMSDB, u.stability))
+        let probes = [30.0, 50, 100, 1000, 5000, 10_000, 15_000, 18_000]
+        say("dB at " + probes.map { String(format: "%.0f Hz: %.2f", $0, r.magnitudeDB[FrequencyGrid.index(of: $0)]) }.joined(separator: ", "))
         let ok = abs(mag) < 1 && spread < 2 && coh > 0.9
         say(ok ? "PASS" : "FAIL")
         return ok ? 0 : 1
