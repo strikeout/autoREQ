@@ -41,6 +41,7 @@ struct LoopbackView: View {
                     }
                     .padding(6)
                 }
+                LoopbackVolume()
                 if let r = model.state.appliedResult {
                     GroupBox("Active correction") {
                         VStack(alignment: .leading, spacing: 4) {
@@ -223,5 +224,44 @@ struct CalibrationSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// Master volume, correction strength and a trim per speaker for the loopback output.
+struct LoopbackVolume: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        GroupBox("Volume") {
+            VStack(alignment: .leading, spacing: 10) {
+                row("Master", value: Binding(get: { model.state.loopbackMasterDB }, set: { model.setMasterVolume($0) }),
+                    range: -60...12, step: 0.5, text: String(format: "%+.1f dB", model.state.loopbackMasterDB),
+                    reset: { model.setMasterVolume(0) }, commit: {})
+                row("Correction strength", value: $model.state.correctionStrength, range: 0...1, step: 0.05,
+                    text: "\(Int((model.state.correctionStrength * 100).rounded())) %",
+                    reset: { model.state.correctionStrength = 1; model.reapplyLoopback() }, commit: { model.reapplyLoopback() })
+                Divider()
+                ForEach(model.loopbackCorrections.map(\.speakerName), id: \.self) { name in
+                    let trim = Binding(get: { model.state.loopbackTrims[name] ?? 0 }, set: { model.state.loopbackTrims[name] = $0 })
+                    row("\(name) trim", value: trim, range: -12...12, step: 0.5, text: String(format: "%+.1f dB", trim.wrappedValue),
+                        reset: { model.state.loopbackTrims[name] = nil; model.reapplyLoopback() }, commit: { model.reapplyLoopback() })
+                }
+                Text("Strength scales every EQ band: 0 % keeps only the crossover, level and delay. Trims and master add to the calibrated gain. A boost above 0 dB can clip.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(6)
+        }
+    }
+
+    /// One slider row. `commit` runs when the drag ends, because a filter rebuild resets the filter state.
+    private func row(_ label: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double, text: String,
+                     reset: @escaping () -> Void, commit: @escaping () -> Void) -> some View {
+        HStack {
+            Text(label).frame(width: 150, alignment: .leading)
+            Slider(value: value, in: range, step: step) { editing in if !editing { commit() } }
+            Text(text).monospacedDigit().frame(width: 70, alignment: .trailing)
+            Button("↩", action: reset).buttonStyle(.borderless)
+        }
     }
 }

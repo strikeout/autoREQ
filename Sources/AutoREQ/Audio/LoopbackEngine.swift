@@ -46,11 +46,15 @@ final class LoopbackEngine: @unchecked Sendable {
     private let left = SampleRing(capacityPowerOfTwo: 1 << 16)
     private let right = SampleRing(capacityPowerOfTwo: 1 << 16)
     private let bank = OSAllocatedUnfairLock<[Channel]>(initialState: [])
-    private final class Counter: @unchecked Sendable { let value = Atomic<Int>(0) }
-    private let underruns = Counter()
+    /// Atomics cannot be copied into a closure, so the render closure shares this box.
+    private final class Shared: @unchecked Sendable {
+        let resyncs = Atomic<Int>(0)
+        let masterGain = Atomic<UInt32>(Float(1).bitPattern)
+    }
+    private let shared = Shared()
 
     var outputChannelCount: Int { output.channelCount }
-    var resyncCount: Int { underruns.value.load(ordering: .relaxed) }
+    var resyncCount: Int { shared.resyncs.load(ordering: .relaxed) }
 
     init(inputDevice: AudioDeviceID, outputDevice: AudioDeviceID, sampleRate: Double) throws {
         AudioDevice.setSampleRate(sampleRate, for: inputDevice)
@@ -62,9 +66,10 @@ final class LoopbackEngine: @unchecked Sendable {
             l.write(p0, frames)
             r.write(p1, frames)
         }
-        let bank = bank, underruns = underruns
+        let bank = bank, sh = shared
         var current: [Channel] = []
         var readPos = -1
+        var gain: Float = 1
         do {
             output = try OutputStream(device: outputDevice) { chans, frames in
                 if let next = bank.withLockIfAvailable({ $0 }) { current = next }
@@ -74,7 +79,7 @@ final class LoopbackEngine: @unchecked Sendable {
                 // when it drifts out of range, which clicks about once per minute at worst. Upgrade: an adaptive resampler.
                 let target = frames * 2 + 256
                 if readPos < 0 || written - readPos < frames || written - readPos > target * 4 {
-                    if readPos >= 0 { underruns.value.add(1, ordering: .relaxed) }
+                    if readPos >= 0 { sh.resyncs.add(1, ordering: .relaxed) }
                     readPos = written - target
                 }
                 for ch in current where ch.output < chans.count {
@@ -90,6 +95,14 @@ final class LoopbackEngine: @unchecked Sendable {
                     }
                 }
                 readPos += frames
+                // The master volume ramps over one buffer, so a fader move does not click.
+                let next = Float(bitPattern: sh.masterGain.load(ordering: .relaxed))
+                let step = (next - gain) / Float(max(frames, 1))
+                for buf in chans {
+                    guard let p = buf.mData?.assumingMemoryBound(to: Float.self) else { continue }
+                    for i in 0..<frames { p[i] *= gain + step * Float(i + 1) }
+                }
+                gain = next
             }
         } catch {
             input.stop()
@@ -106,6 +119,11 @@ final class LoopbackEngine: @unchecked Sendable {
         }
         let channels = c.map { Channel($0, sampleRate: sampleRate, bypass: bypass) }
         bank.withLock { $0 = channels }
+    }
+
+    /// Sets the master volume after the correction. The render thread ramps to the new value.
+    func setMasterVolume(dB: Double) {
+        shared.masterGain.store(Float(pow(10, dB / 20)).bitPattern, ordering: .relaxed)
     }
 
     func stop() {

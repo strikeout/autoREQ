@@ -54,6 +54,17 @@ struct PersistedState: Codable {
     var result: CalibrationResult?
     var appliedResult: CalibrationResult?
     var loopbackBypass = false
+    // The loopback volume fields are optional so that a state file from an older version still decodes.
+    var loopbackMasterDBStored: Double?
+    var loopbackTrimsStored: [String: Double]?
+    var correctionStrengthStored: Double?
+
+    /// The master volume after the correction, in dB.
+    var loopbackMasterDB: Double { get { loopbackMasterDBStored ?? 0 } set { loopbackMasterDBStored = newValue } }
+    /// A trim in dB per speaker name, on top of the calibrated gain.
+    var loopbackTrims: [String: Double] { get { loopbackTrimsStored ?? [:] } set { loopbackTrimsStored = newValue } }
+    /// 0…1. It scales the gain of every EQ band.
+    var correctionStrength: Double { get { correctionStrengthStored ?? 1 } set { correctionStrengthStored = newValue } }
 }
 
 @Observable @MainActor
@@ -261,7 +272,8 @@ final class AppModel {
         guard inDev.id != outDev.id else { loopbackError = "The loopback input and the speaker output must be different devices."; return }
         do {
             let l = try LoopbackEngine(inputDevice: inDev.id, outputDevice: outDev.id, sampleRate: state.sampleRate)
-            l.apply(state.appliedResult?.corrections ?? [], bypass: state.loopbackBypass)
+            l.apply(loopbackCorrections, bypass: state.loopbackBypass)
+            l.setMasterVolume(dB: state.loopbackMasterDB)
             loopback = l
             loopbackError = nil
         } catch {
@@ -276,12 +288,37 @@ final class AppModel {
 
     func setBypass(_ b: Bool) {
         state.loopbackBypass = b
-        loopback?.apply(state.appliedResult?.corrections ?? [], bypass: b)
+        reapplyLoopback()
     }
 
     func applyResult(_ r: CalibrationResult?) {
         state.appliedResult = r
-        loopback?.apply(r?.corrections ?? [], bypass: state.loopbackBypass)
+        reapplyLoopback()
+    }
+
+    /// The applied correction with the user's trims and strength, or a stereo pass-through if there is none.
+    var loopbackCorrections: [ChannelCorrection] {
+        var cs = state.appliedResult?.corrections
+            ?? SystemTemplate.stereo.speakers.map { ChannelCorrection(speaker: $0, outputChannel: $0.outputChannel!) }
+        let strength = state.correctionStrength
+        for i in cs.indices {
+            cs[i].gainDB += state.loopbackTrims[cs[i].speakerName] ?? 0
+            for k in cs[i].eq.indices where [.peaking, .lowShelf, .highShelf].contains(cs[i].eq[k].type) {
+                cs[i].eq[k].gainDB *= strength
+            }
+        }
+        return cs
+    }
+
+    /// Rebuilds the loopback filters. Call it after a trim or strength change, not on every slider step:
+    /// a rebuild resets the filter state.
+    func reapplyLoopback() {
+        loopback?.apply(loopbackCorrections, bypass: state.loopbackBypass)
+    }
+
+    func setMasterVolume(_ dB: Double) {
+        state.loopbackMasterDB = dB
+        loopback?.setMasterVolume(dB: dB)
     }
 
     // MARK: Files
