@@ -10,7 +10,7 @@ USB protocol of that device is not public.
 - **Stack:** Swift 6.4 (language mode 5), SwiftPM, SwiftUI, Swift Charts, AVAudioEngine, CoreAudio, Accelerate. macOS 15+.
 - **Runs with:** `./scripts/bundle.sh && open build/AutoREQ.app`
 - **Tests with:** `swift test` (DSP core). End-to-end audio check: `open -W --stdout out.txt build/AutoREQ.app --args --selftest "VB-Cable"`
-- **Deploys to:** not deployed yet
+- **Deploys to:** GitHub releases at https://github.com/strikeout/autoREQ. Push a tag that equals `version.txt` (for example `v1.0.0`); `.github/workflows/release.yml` builds and attaches `AutoREQ.zip`. The release notes come from the matching `## vX.Y.Z` section of `CHANGELOG.md`.
 
 This file is the project's durable memory. It is read before every task and it is expected to
 grow. Keep it factual, keep it current, delete what stopped being true.

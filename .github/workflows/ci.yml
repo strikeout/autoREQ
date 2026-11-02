@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show the toolchain
+        run: swift --version
+      - name: Run the tests
+        run: swift test
+      - name: Build the app bundle
+        run: ./scripts/bundle.sh
+      - name: Check that version.txt is valid
+        run: grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' version.txt
