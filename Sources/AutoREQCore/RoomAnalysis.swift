@@ -47,15 +47,24 @@ public final class ImpulseAnalyzer {
     public let sampleRate: Double
     /// The number of frames in the running average.
     public var maxFrames = 16
+    /// Set this when the reference repeats with a period of `fftSize`, for example periodic pink noise.
+    /// One frame is then exactly one period, and the frame has no window error to remove.
+    public var periodic = false
     public private(set) var frameCount = 0
 
     private let fwd: vDSP.DiscreteFourierTransform<Float>
     private let inv: vDSP.DiscreteFourierTransform<Float>
     private var gxx: [Double], gxyRe: [Double], gxyIm: [Double]
 
-    public init(sampleRate: Double) {
+    /// The frame length for `sampleRate`: the first power of two above 1.2 s.
+    public static func frameLength(sampleRate: Double) -> Int {
         var n = 1 << 14
         while Double(n) < sampleRate * 1.2 { n <<= 1 }
+        return n
+    }
+
+    public init(sampleRate: Double) {
+        let n = Self.frameLength(sampleRate: sampleRate)
         fftSize = n
         self.sampleRate = sampleRate
         fwd = try! vDSP.DiscreteFourierTransform(count: n, direction: .forward, transformType: .complexComplex, ofType: Float.self)
@@ -101,7 +110,7 @@ public final class ImpulseAnalyzer {
         var out = [Float](repeating: 0, count: pre + half)
         for i in 0..<out.count {
             let lag = i - pre
-            let w = 1 - Double(abs(lag)) / Double(n)
+            let w = periodic ? 1 : 1 - Double(abs(lag)) / Double(n)
             out[i] = t[(lag + n) % n] / Float(Double(n) * w)
         }
         return ImpulseResponse(samples: out, sampleRate: sampleRate, zeroIndex: pre)

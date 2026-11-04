@@ -126,6 +126,19 @@ cat version.txt
   measurement. The engine adds an impulse frame every 5th tick (0.5 s).
 - The JSON state keeps `Response.impulse` as raw Float32 data in base64. `applying`, `sum` and
   `powerAverage` set it to nil, because their output is no longer a measurement.
+- Generator levels are RMS levels relative to a digital value of 1.0. Each `SignalGenerator`
+  signal has an RMS of 1.0 before the gain. Before v1.2.0, the pink noise was 7.5 dB below its
+  nominal level, so the old calibration default of −12 dB equals −20 dBFS RMS now.
+- The render thread reads the generator through `Mutex.withLockIfAvailable`. It plays silence for
+  one buffer if the main thread holds the lock to swap the signal. Build a new `SignalGenerator`
+  on the main thread, because periodic noise and file playback allocate a table.
+- Periodic pink noise has a period of `ImpulseAnalyzer.fftSize`. The engine sets
+  `ImpulseAnalyzer.periodic`, which turns off the (1 - |t| / N) correction. The delay search then
+  uses a range shorter than one period, because the noise matches at every period.
+- A tone (sine or dual sine) gives no transfer function. The engine skips the transfer function
+  and reports the status `.tone`.
+- The engine writes the first 8 input channels to `inputRings` for the RTA. `SpectrumAnalyzer`
+  uses the IEC 61260-1 base-ten bands and weights each FFT bin by its overlap with the band.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

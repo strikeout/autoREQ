@@ -38,12 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home = "Home", measure = "Measure", calibrate = "Calibrate", room = "Room Analysis", loopback = "Loopback", target = "Target Curve", settings = "Settings"
+    case home = "Home", measure = "Measure", spectrum = "Spectrum", calibrate = "Calibrate", room = "Room Analysis", loopback = "Loopback", target = "Target Curve", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .home: "house"
         case .measure: "waveform.path.ecg"
+        case .spectrum: "chart.bar.xaxis"
         case .calibrate: "wand.and.stars"
         case .room: "waveform.badge.magnifyingglass"
         case .loopback: "arrow.triangle.2.circlepath"
@@ -83,6 +84,7 @@ struct ContentView: View {
                 case .home: HomeView(section: $section)
                 case .measure: if let session { MeasureView(section: $section, session: session) }
                 case .calibrate: if let session { CalibrateView(session: session) }
+                case .spectrum: SpectrumView()
                 case .room: RoomView()
                 case .loopback: LoopbackView()
                 case .target: TargetCurveView()
