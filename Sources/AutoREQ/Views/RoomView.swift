@@ -18,6 +18,8 @@ struct RoomView: View {
     @State private var noiseBands: [Double]?
     @State private var auditory = true
     @State private var sti: STIResult?
+    /// The inputs of `sti`. The view shows `sti` only while they match the current inputs.
+    @State private var stiFor: STIKey?
     @State private var measuringNoise = false
 
     private struct STIKey: Hashable {
@@ -126,9 +128,11 @@ struct RoomView: View {
         .task(id: STIKey(ir: source?.impulse, speech: speechDBA, noise: noiseBands, auditory: auditory)) {
             guard let ir = source?.impulse else { sti = nil; return }
             let (s, n, a) = (speechDBA, noiseBands, auditory)
+            let key = STIKey(ir: ir, speech: s, noise: n, auditory: a)
             sti = await Task.detached(priority: .userInitiated) {
                 SpeechTransmission.analyze(ir, speechLevelDBA: s, noiseBandLevels: n, auditoryEffects: a)
             }.value
+            stiFor = key
         }
         .task(id: Key(source: source, compare: compareIDs, banding: banding)) {
             guard let r = source else { result = nil; return }
@@ -321,7 +325,7 @@ struct RoomView: View {
                     }
                     Spacer()
                 }
-                if let s = sti {
+                if let s = sti, stiFor == STIKey(ir: source?.impulse, speech: speechDBA, noise: noiseBands, auditory: auditory) {
                     HStack(alignment: .top, spacing: 30) {
                         VStack(alignment: .leading) {
                             Text("STI").font(.caption).foregroundStyle(.secondary)
