@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.8.1
+
+- The Target Curve screen shows the presets as cards with a small preview of each curve.
+- The chart fills the area under the curve and marks the bass, the midrange and the treble.
+- The chart can show the measured room of the last calibration and the other presets.
+- You can drag the points of the custom curve. The custom points stay when you select a preset.
+
 ## v1.8.0
 
 - The new Remote tab in Settings starts a local web viewer and a JSON API. The server is off by default.

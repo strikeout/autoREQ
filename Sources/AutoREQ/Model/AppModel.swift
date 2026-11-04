@@ -149,6 +149,8 @@ struct PersistedState: Codable {
     var timerStored: CaptureTimer?
     var splStored: SPLSettings?
     var areasStored: [ListeningArea]?
+    /// The last custom target curve, so a preset choice does not lose the custom points.
+    var customTarget: TargetCurve?
     /// The I/O buffer size in frames. Nil keeps the size of the device.
     var bufferFrames: Int?
     /// The space plan of the Complete Measurement mode. The first area is the main area.

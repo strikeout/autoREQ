@@ -65,55 +65,6 @@ struct LoopbackView: View {
     }
 }
 
-struct TargetCurveView: View {
-    @Environment(AppModel.self) private var model
-
-    var body: some View {
-        @Bindable var model = model
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Target Curve").font(.title2.bold())
-            Text("The target is a shape only, not a loudness.").foregroundStyle(.secondary)
-            Picker("Preset", selection: Binding(get: { model.state.target.name }, set: { name in
-                if let p = TargetCurve.presets.first(where: { $0.name == name }) { model.state.target = p }
-                else { var c = model.state.target; c.name = "Custom"; model.state.target = c }
-            })) {
-                ForEach(TargetCurve.presets) { Text($0.name + ($0 == .houseFlat ? " ★" : "")).tag($0.name) }
-                Text("Custom").tag("Custom")
-            }
-            .frame(width: 320)
-            Chart {
-                ForEach(Array(stride(from: 0, to: FrequencyGrid.count, by: 4)).filter { (20...20_000).contains(FrequencyGrid.frequencies[$0]) }, id: \.self) { i in
-                    LineMark(x: .value("Hz", FrequencyGrid.frequencies[i]), y: .value("dB", model.state.target.gain(at: FrequencyGrid.frequencies[i])))
-                        .foregroundStyle(.yellow)
-                }
-                ForEach(model.state.target.points) { p in
-                    PointMark(x: .value("Hz", p.frequency), y: .value("dB", p.gainDB)).foregroundStyle(.white)
-                }
-            }
-            .chartXScale(domain: 20...20_000, type: .log)
-            .chartYScale(domain: -12...12)
-            .chartXAxis { ResponseChart.frequencyAxis }
-            .frame(height: 240)
-            if model.state.target.name == "Custom" {
-                VStack(alignment: .leading) {
-                    ForEach($model.state.target.points) { $p in
-                        HStack {
-                            TextField("Hz", value: $p.frequency, format: .number).frame(width: 90)
-                            Text("Hz")
-                            Stepper(String(format: "%+.1f dB", p.gainDB), value: $p.gainDB, in: TargetCurve.gainRange, step: 0.5)
-                            Button { model.state.target.points.removeAll { $0.id == p.id } } label: { Image(systemName: "xmark") }
-                                .disabled(model.state.target.points.count <= 2)
-                        }
-                    }
-                    Button("+ Add point") { model.state.target.points.append(.init(1000, 0)) }
-                }
-            }
-            Spacer()
-        }
-        .padding(24)
-    }
-}
-
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var confirmReset = false

@@ -37,9 +37,11 @@ The Loopback screen sets the devices, the volume and the trim of each speaker.
 
 ![The Loopback screen with the volume controls](docs/screenshots/loopback.png)
 
-The Target Curve screen shows the selected preset or your custom curve.
+The Target Curve screen shows the presets as cards and the selected curve in a large chart. The
+chart can also show the measured room and the other presets. You can drag the points of the
+custom curve.
 
-![The Target Curve screen with the House Flat preset](docs/screenshots/target-curve.png)
+![The Target Curve screen with the preset cards and the House Flat curve over the measured room](docs/screenshots/target-curve.png)
 
 ## Features
 
