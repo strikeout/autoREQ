@@ -115,7 +115,8 @@ struct SettingsView: View {
                             .onLongPressGesture(minimumDuration: 0.01, pressing: { down in
                                 testing = down
                                 if down {
-                                    Task { if await model.startEngine() { model.setNoise(Set(0..<(model.engine?.outputChannelCount ?? 2)), levelDBFS: -30) } }
+                                    // The engine can start after the release. Then `testing` is false, and no noise starts.
+                                    Task { if await model.startEngine(), testing { model.setNoise(Set(0..<(model.engine?.outputChannelCount ?? 2)), levelDBFS: -30) } }
                                 } else { model.setNoise([]) }
                             }, perform: {})
                         Text("Hold to play pink noise at −30 dBFS on all channels.").font(.caption).foregroundStyle(.secondary)
@@ -185,6 +186,7 @@ struct SettingsView: View {
         .onChange(of: model.state.outputDeviceUID) { Task { await model.restartEngine() } }
         .onChange(of: model.state.sampleRate) { Task { await model.restartEngine() } }
         .onChange(of: model.state.bufferFrames) { Task { await model.restartEngine() } }
+        .onDisappear { if testing { testing = false; model.setNoise([]) } }
         .alert("Reset to factory defaults?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive) { model.factoryReset() }
             Button("Cancel", role: .cancel) {}
@@ -205,7 +207,7 @@ struct CalibrationSettings: View {
             }
             Section("Measurement") {
                 Picker("Quick Positions", selection: $model.state.options.quickPositions) { ForEach([1, 3, 5, 7], id: \.self) { Text("\($0)").tag($0) } }
-                Picker("Full Positions (main area)", selection: $model.state.areas[0].positions) { ForEach([3, 5, 7, 9], id: \.self) { Text("\($0)").tag($0) } }
+                Stepper("Full Positions (main area): \(model.state.areas[0].positions)", value: $model.state.areas[0].positions, in: 1...16)
             }
             Section("Alignment") {
                 Picker("Gain Estimation", selection: $model.state.options.gainEstimation) { ForEach(CorrectionOptions.GainEstimation.allCases) { Text($0.rawValue).tag($0) } }
@@ -330,16 +332,20 @@ struct RemoteSettings: View {
     @State private var lan = false
 
     var body: some View {
+        content.onAppear { lan = model.remote?.isRunning == true ? model.remote!.lan : lan }
+    }
+
+    private var content: some View {
         Form {
             Section("Web viewer and API") {
                 Toggle("Allow connections from the local network", isOn: $lan)
-                    .onChange(of: lan) { if model.remote != nil { model.startRemote(lan: lan) } }
+                    .onChange(of: lan) { if model.remote?.isRunning == true, model.remote?.lan != lan { model.startRemote(lan: lan) } }
                 if lan {
                     Text("Warning: every device on the network that has the URL can read the measurements and start the test signal. Use this only on a network that you trust.")
                         .font(.caption).foregroundStyle(.orange)
                 }
                 HStack {
-                    if let r = model.remote {
+                    if let r = model.remote, r.isRunning {
                         Circle().fill(.green).frame(width: 8, height: 8)
                         Text(r.viewerURL).font(.caption.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
                         Button("Copy URL") {

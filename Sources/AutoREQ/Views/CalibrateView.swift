@@ -95,7 +95,10 @@ struct ConfigureStage: View {
                             }.frame(width: 140)
                             if sp.outputChannel == nil { Text("Won't be measured.").font(.caption).foregroundStyle(.orange) }
                             Spacer()
-                            Button { model.state.speakers.removeAll { $0.id == sp.id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
+                            // Read the id before the removal. A read of `sp` inside `removeAll` reads the array
+                            // through the binding while the array changes, and Swift stops the app.
+                            let id = sp.id
+                            Button { model.state.speakers.removeAll { $0.id == id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
                         }
                     }
                     HStack {
@@ -406,7 +409,8 @@ struct SpacePlan: View {
                                 ForEach(AreaWeight.allCases) { Text("\($0.label) (\(String(format: "%.2f", $0.rawValue)))").tag($0) }
                             }
                             .frame(width: 220)
-                            Button { model.state.areas.removeAll { $0.id == a.id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
+                            let id = a.id
+                            Button { model.state.areas.removeAll { $0.id == id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
                         }
                         Spacer()
                     }

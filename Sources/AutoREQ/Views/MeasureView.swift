@@ -32,7 +32,7 @@ struct MeasureView: View {
         let ref = model.referenceSnapshot?.displayed
         func relative(_ r: Response) -> Response { ref.map(r.dividing(by:)) ?? r }
         if model.engine != nil {
-            let chans = [model.state.micChannel] + model.state.extraMicChannels
+            let chans = model.micChannels
             for (k, c) in chans.enumerated() {
                 guard let r = model.liveByChannel[c] ?? (k == 0 ? model.live : nil) else { continue }
                 let shown = r.offset(delayMs: model.state.liveDelayMs, gainDB: 0, inverted: false)
@@ -97,7 +97,8 @@ struct MeasureView: View {
             Button("−") { model.state.liveDelayMs -= delayStep }.buttonStyle(.borderless)
             Text(String(format: "%.3f ms", model.state.liveDelayMs)).monospacedDigit().frame(width: 72)
             Button("+") { model.state.liveDelayMs += delayStep }.buttonStyle(.borderless)
-            Button("Find") { if let t = model.live?.impulse?.peakTimeMs { model.state.liveDelayMs = t } }
+            // A peak at +t ms means a phase of -360·f·t, so a delay offset of -t ms flattens it.
+            Button("Find") { if let t = model.live?.impulse?.peakTimeMs { model.state.liveDelayMs = -t } }
                 .buttonStyle(.borderless).disabled(model.live?.impulse == nil)
                 .help("Sets the phase delay to the peak of the impulse response, so the phase of the direct sound is flat.")
             Button("↩") { model.state.liveDelayMs = 0 }.buttonStyle(.borderless)

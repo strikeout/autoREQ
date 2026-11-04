@@ -301,6 +301,9 @@ final class AppModel {
     var outputDevice: AudioDevice? { device(uid: state.outputDeviceUID, input: false) }
     var loopbackInput: AudioDevice? { device(uid: state.loopbackInputUID, input: true) }
 
+    /// The mic channels that the engine measures now. The first is the main mic.
+    var micChannels: [Int] { engine?.micChannels ?? [state.micChannel] }
+
     // MARK: Measurement engine
 
     func requestMic() async -> Bool {
@@ -321,6 +324,14 @@ final class AppModel {
             AudioDevice.setBufferSize(b, for: out.id)
             AudioDevice.setBufferSize(b, for: mic.id)
         }
+        // Remove the channels that the current mic device does not have, so no hidden setting stays.
+        let inputs = min(mic.inputChannels, MeasurementEngine.maxSpectrumChannels)
+        let extras = state.extraMicChannels.filter { $0 != state.micChannel && $0 < inputs }
+        if extras != state.extraMicChannels { state.extraMicChannels = extras }
+        let spec = state.spectrum.channels.filter { $0 < inputs }
+        if spec != state.spectrum.channels { state.spectrum.channels = spec.isEmpty ? [0] : spec }
+        let spl = state.spl.channels.filter { $0 < inputs }
+        if spl != state.spl.channels { state.spl.channels = spl.isEmpty ? [0] : spl }
         do {
             let e = try MeasurementEngine(outputDevice: out.id, inputDevice: mic.id, micChannels: [state.micChannel] + state.extraMicChannels,
                                           sampleRate: state.sampleRate, averaging: state.averaging, multiWindow: state.multiWindow)
@@ -392,23 +403,34 @@ final class AppModel {
     }
 
     /// Plays the generator setup of `state.generator`.
-    func startGenerator() async {
-        guard await startEngine(), let e = engine else { return }
+    /// The peak-to-RMS ratio of the loaded audio file in dB, for the clip warning.
+    var fileCrestDB: Double?
+
+    /// Plays the generator setup of `state.generator`. It returns false when the signal does not start.
+    @discardableResult
+    func startGenerator() async -> Bool {
+        guard await startEngine(), let e = engine else { return false }
         let g = state.generator
         var samples: [Float] = []
         if g.signal.kind == .file {
-            guard let path = g.signal.filePath else { engineError = "Choose an audio file for the generator."; return }
+            guard let path = g.signal.filePath else { engineError = "Choose an audio file for the generator."; return false }
             if let f = loadedFile, f.path == path, f.rate == e.sampleRate {
                 samples = f.samples
+                let rms = Double(vDSP.rootMeanSquare(samples)), peak = Double(vDSP.maximumMagnitude(samples))
+                fileCrestDB = rms > 0 ? 20 * log10(peak / rms) : nil
             } else {
                 do {
                     samples = try await Task.detached { try AudioFileLoader.load(URL(fileURLWithPath: path), sampleRate: e.sampleRate) }.value
                     loadedFile = (path, e.sampleRate, samples)
                 } catch {
                     engineError = "The app cannot read \(URL(fileURLWithPath: path).lastPathComponent): \(error.localizedDescription)"
-                    return
+                    return false
                 }
+                // The user can select another signal while the file loads. Then the new signal wins.
+                guard state.generator == g, engine === e else { return false }
             }
+            let rms = Double(vDSP.rootMeanSquare(samples)), peak = Double(vDSP.maximumMagnitude(samples))
+            fileCrestDB = rms > 0 ? 20 * log10(peak / rms) : nil
         }
         let chans = generatorChannels
         noiseChannels = chans
@@ -416,6 +438,7 @@ final class AppModel {
         // A tone gives no transfer function, so the last one must not stay on the screen.
         if g.signal.kind.isTonal { live = nil }
         e.setOutput(channels: chans, signal: g.signal, levelDBFS: g.levelDBFS, fileSamples: samples)
+        return true
     }
 
     /// Applies a changed generator setup while the generator plays. A level change does not restart the analysis.
@@ -493,10 +516,11 @@ final class AppModel {
     private(set) var remote: RemoteServer?
     var remoteError: String?
 
-    /// Starts the server on 127.0.0.1, or on all interfaces with `lan`. The token stays the same until the app quits.
+    /// Starts the server on 127.0.0.1, or on all interfaces with `lan`. The server object stays after a stop,
+    /// so the token stays the same until the app quits.
     func startRemote(lan: Bool) {
         let r = remote ?? RemoteServer(model: self)
-        r.onFailure = { [weak self] msg in self?.remoteError = msg; self?.remote = nil }
+        r.onFailure = { [weak self] msg in self?.remoteError = msg }
         do {
             try r.start(lan: lan)
             remote = r
@@ -515,10 +539,7 @@ final class AppModel {
         }
     }
 
-    func stopRemote() {
-        remote?.stop()
-        remote = nil
-    }
+    func stopRemote() { remote?.stop() }
 
     // MARK: Background noise for STI
 
@@ -557,10 +578,19 @@ final class AppModel {
         splSettingsChanged()
     }
 
+    /// The channels of the running SPL log. The meters of these channels stay on.
+    private var splLogChannels: [Int] = []
+
+    /// The calibrations of the channels that need a meter: the SPL screen channels and the log channels.
+    private var meterCalibrations: [Int: Double] {
+        let chans = Set((splRunning ? state.spl.channels : []) + (splLog != nil ? splLogChannels : []))
+        return Dictionary(uniqueKeysWithValues: chans.map { ($0, splCalibration($0) ?? 0) })
+    }
+
     func stopSPL() {
         guard splRunning else { return }
         splRunning = false
-        if splLog == nil { engine?.setSoundLevel(calibrations: [:]) }
+        engine?.setSoundLevel(calibrations: meterCalibrations)
         spectrumRunning = false
         engine?.setSpectrum(channels: [], banding: engineBanding, averaging: .slow)
     }
@@ -569,7 +599,7 @@ final class AppModel {
     func splSettingsChanged() {
         guard splRunning || splLog != nil else { return }
         let s = state.spl
-        engine?.setSoundLevel(calibrations: Dictionary(uniqueKeysWithValues: s.channels.map { ($0, splCalibration($0) ?? 0) }))
+        engine?.setSoundLevel(calibrations: meterCalibrations)
         spectrum = [:]
         spectrumPeak = [:]
         spectrumRunning = true
@@ -599,6 +629,7 @@ final class AppModel {
         panel.nameFieldStringValue = "AutoREQ SPL \(f.string(from: Date())).csv"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let chans = state.spl.channels
+        splLogChannels = chans
         let header = SPLLogFormat.header(channels: chans.map { "Ch\($0 + 1)" }, leqWindows: [(60, .a), (600, .a), (900, .a)])
         guard FileManager.default.createFile(atPath: url.path, contents: Data((header + "\n").utf8)), let h = try? FileHandle(forWritingTo: url) else {
             engineError = "The app cannot write \(url.lastPathComponent)."
@@ -623,6 +654,8 @@ final class AppModel {
         splLogTask = nil
         try? splLog?.close()
         splLog = nil
+        splLogChannels = []
+        if !splRunning { engine?.setSoundLevel(calibrations: [:]) }
         splLogURL = nil
         if let a = splActivity { ProcessInfo.processInfo.endActivity(a) }
         splActivity = nil
@@ -685,7 +718,7 @@ final class AppModel {
     func autoCapture() async {
         guard await startEngine() else { return }
         autoCapturing = true
-        await startGenerator()
+        if !(await startGenerator()) { autoCapturing = false }
     }
 
     // MARK: Mic calibration
@@ -740,17 +773,22 @@ final class AppModel {
     /// Keeps the live response of each mic as a snapshot. The snapshot gets the live plot time reference as its delay offset.
     /// Returns the new snapshots.
     @discardableResult
-    func takeSnapshot(name: String? = nil, speakerID: UUID? = nil) -> [Snapshot] {
-        let chans = [state.micChannel] + state.extraMicChannels.filter { liveByChannel[$0] != nil }
+    func takeSnapshot(name: String? = nil, speakerID: UUID? = nil) -> [Snapshot] { takeSnapshots(name: name, speakerID: speakerID).map(\.snapshot) }
+
+    /// Keeps one snapshot for each mic and returns each with its mic channel.
+    @discardableResult
+    func takeSnapshots(name: String? = nil, speakerID: UUID? = nil) -> [(channel: Int, snapshot: Snapshot)] {
+        let all = micChannels
+        let chans = all.filter { liveByChannel[$0] != nil || $0 == all[0] }
         let base = name ?? "Snapshot \(state.snapshots.count + 1)"
-        var added: [Snapshot] = []
+        var added: [(Int, Snapshot)] = []
         for c in chans {
-            guard let r = liveByChannel[c] ?? (c == state.micChannel ? live : nil) else { continue }
+            guard let r = liveByChannel[c] ?? (c == all[0] ? live : nil) else { continue }
             let n = state.snapshots.count
-            var s = Snapshot(name: chans.count > 1 ? "\(base) · Ch \(c + 1)" : base, colorHex: Self.palette[n % Self.palette.count], response: r, speakerID: speakerID)
+            var s = Snapshot(name: all.count > 1 ? "\(base) · Ch \(c + 1)" : base, colorHex: Self.palette[n % Self.palette.count], response: r, speakerID: speakerID)
             s.offsetDelayMs = state.liveDelayMs
             state.snapshots.append(s)
-            added.append(s)
+            added.append((c, s))
         }
         return added
     }
@@ -844,9 +882,11 @@ final class AppModel {
                 engineError = "\(url.lastPathComponent) is not a WAV file this app can read."
                 continue
             }
+            // Keep 10 ms before the peak and at most 10 s after it, so a long file cannot fill the memory.
             let peak = x.indices.max { abs(x[$0]) < abs(x[$1]) } ?? 0
+            let lo = max(0, peak - Int(0.01 * wav.sampleRate)), hi = min(x.count, peak + Int(10 * wav.sampleRate))
             let k = state.snapshots.count
-            let ir = ImpulseResponse(samples: x, sampleRate: wav.sampleRate, zeroIndex: peak)
+            let ir = ImpulseResponse(samples: Array(x[lo..<hi]), sampleRate: wav.sampleRate, zeroIndex: peak - lo)
             state.snapshots.append(Snapshot(name: url.deletingPathExtension().lastPathComponent, colorHex: Self.palette[k % Self.palette.count], response: Response(impulse: ir)))
         }
     }
@@ -858,28 +898,30 @@ final class AppModel {
         stopTimer()
         let t = state.timer
         timerProgress = (0, t.count)
+        let several = micChannels.count > 1
         timerTask = Task {
-            var captured: [Snapshot] = []
+            var captured: [(channel: Int, snapshot: Snapshot)] = []
             for k in 1...max(1, t.count) {
                 try? await Task.sleep(for: .seconds(t.intervalSeconds))
                 guard !Task.isCancelled, live != nil, !noiseChannels.isEmpty else { break }
-                captured += takeSnapshot(name: "Timer \(k)/\(t.count)")
+                captured += takeSnapshots(name: "Timer \(k)/\(t.count)")
                 timerProgress = (k, t.count)
             }
+            // A stopped timer keeps its captures and adds no average. A new timer owns the progress.
+            guard !Task.isCancelled else { return }
             if t.average, captured.count > 1 {
-                // One average for each mic channel. The names end in "· Ch n" when there are several mics.
-                let groups = Dictionary(grouping: captured) { $0.name.components(separatedBy: " · ").dropFirst().first ?? "" }
+                let groups = Dictionary(grouping: captured) { $0.channel }
                 for (ch, items) in groups.sorted(by: { $0.key < $1.key }) {
-                    guard let avg = Response.powerAverage(items.map(\.response)) else { continue }
+                    guard let avg = Response.powerAverage(items.map(\.snapshot.response)) else { continue }
                     let n = state.snapshots.count
-                    var s = Snapshot(name: "Timer average" + (ch.isEmpty ? "" : " · \(ch)"), colorHex: Self.palette[n % Self.palette.count], response: avg)
-                    s.offsetDelayMs = items[0].offsetDelayMs
+                    var s = Snapshot(name: "Timer average" + (several ? " · Ch \(ch + 1)" : ""), colorHex: Self.palette[n % Self.palette.count], response: avg)
+                    s.offsetDelayMs = items[0].snapshot.offsetDelayMs
                     state.snapshots.append(s)
                 }
-            }
-            if !t.keepEach && t.average && captured.count > 1 {
-                let ids = Set(captured.map(\.id))
-                state.snapshots.removeAll { ids.contains($0.id) }
+                if !t.keepEach {
+                    let ids = Set(captured.map(\.snapshot.id))
+                    state.snapshots.removeAll { ids.contains($0.id) }
+                }
             }
             timerProgress = nil
         }

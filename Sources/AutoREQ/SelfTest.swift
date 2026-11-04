@@ -108,7 +108,9 @@ enum SelfTest {
         if let ir = last?.response?.impulse, let peak = ir.samples.indices.max(by: { abs(ir.samples[$0]) < abs(ir.samples[$1]) }) {
             let refl = RoomAnalysis.reflections(ir)
             say(String(format: "periodic pink: impulse peak %.3f at %.2f ms, %d reflections", ir.samples[peak], ir.timeMs(peak), refl.count))
-            periodicOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty && ir.samples[peak] > 0.8
+            // The noise stops at 20 kHz, so the peak is about the part of the band below 20 kHz.
+            let expected = 0.75 * min(1.0, 20_000 / (rate / 2))
+            periodicOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty && Double(ir.samples[peak]) > expected
         } else { say("periodic pink: no impulse response") }
 
         // The remote server answers a request with the token, and refuses a request without it.
@@ -125,7 +127,12 @@ enum SelfTest {
             }
             let good = await status("/api/status?token=\(server.token)"), bad = await status("/api/status?token=wrong"), page = await status("/?token=\(server.token)")
             say("remote: status \(good), wrong token \(bad), viewer \(page)")
-            remoteOK = good == 200 && bad == 401 && page == 200
+            // A restart on the same port must wait until the old listener frees the port.
+            try server.start(lan: false)
+            try? await Task.sleep(for: .milliseconds(800))
+            let again = await status("/api/status?token=\(server.token)")
+            say("remote: status after a restart \(again)")
+            remoteOK = good == 200 && bad == 401 && page == 200 && again == 200
         } catch { say("remote: \(error.localizedDescription)") }
         server.stop()
 

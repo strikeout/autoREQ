@@ -54,7 +54,7 @@ final class CalibrationSession {
     /// The number of positions in the current area.
     var positions: Int { area.positions }
     /// The number of mics that measure at the same time.
-    var micCount: Int { 1 + app.state.extraMicChannels.filter { $0 != app.state.micChannel }.count }
+    var micCount: Int { app.engine?.micChannels.count ?? 1 + app.state.extraMicChannels.filter { $0 != app.state.micChannel }.count }
     /// The number of mic moves in the current area. Each round measures one position for each mic.
     var rounds: Int { max(1, Int((Double(positions) / Double(micCount)).rounded(.up))) }
 

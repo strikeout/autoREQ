@@ -147,7 +147,11 @@ cat version.txt
   `DelayTracker`. The first mic is the main mic. Extra mics read `inputRings`, so they must be
   among the first 8 input channels.
 - Delay tracking (the setting `clockDrift`) replaces the old search every 3 s. It reads the
-  GCC-PHAT peak of the newest impulse frame. A shift must show in two frames in a row.
+  GCC-PHAT peak of the newest impulse frame. A shift must show in two frames in a row, and a shift
+  of one sample does not count. An impulse frame must lie after the last signal change.
+- The main mic ring and the ring of each extra mic hold 12.5 s at the sample rate, for a 10 s sweep
+  and its tail. The other input rings hold 2^18 samples. The delay search range stays shorter than
+  the period of a repeating signal (periodic pink, sweep or file).
 - The mic calibration of the main mic has the device UID as its key. An extra mic uses `uid#channel`.
 - The sweep measurement plays `SignalKind.logSweep`: one sweep and 2 s of silence, looped. The
   render thread stores the reference index of each table start in `periodStart`.
@@ -170,6 +174,8 @@ cat version.txt
 - `RemoteServer` uses `NWListener` with plain HTTP and closes each connection after one reply. It
   binds to 127.0.0.1 unless the user allows the LAN. It does not share a port with another app;
   a bind failure reaches `AppModel.remoteError`. The web viewer polls the API, so there is no WebSocket.
+  A restart waits until the old listener reports `.cancelled`, because the old listener holds the port.
+  `JSONSerialization` raises an exception on NaN, so check `isValidJSONObject` before each reply.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

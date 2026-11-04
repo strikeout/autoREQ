@@ -8,6 +8,8 @@ struct TargetCurveView: View {
     @State private var showPresets = false
     @State private var showRoom = true
     @State private var dragID: UUID?
+    /// True after the first event of a drag. The view selects the point to move at that event only.
+    @State private var dragStarted = false
 
     private static let notes: [String: String] = [
         "House Flat": "A gentle bass lift that becomes flat at 1 kHz. This is the recommended curve.",
@@ -45,6 +47,8 @@ struct TargetCurveView: View {
             ForEach(TargetCurve.presets + [isCustom ? target : TargetCurve.custom]) { t in
                 let selected = t.name == target.name
                 Button {
+                    // Keep the custom points before a preset replaces them.
+                    if isCustom { model.state.customTarget = target }
                     if t.name == "Custom" && !isCustom { model.state.target = model.state.customTarget ?? .custom } else if !selected { model.state.target = t }
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
@@ -158,7 +162,8 @@ struct TargetCurveView: View {
                         guard let frame = proxy.plotFrame else { return }
                         let origin = geo[frame].origin
                         let loc = CGPoint(x: v.location.x - origin.x, y: v.location.y - origin.y)
-                        if dragID == nil {
+                        if !dragStarted {
+                            dragStarted = true
                             dragID = target.points.min { distance($0, loc, proxy) < distance($1, loc, proxy) }
                                 .flatMap { distance($0, loc, proxy) < 30 ? $0.id : nil }
                         }
@@ -168,7 +173,7 @@ struct TargetCurveView: View {
                         model.state.target.points[i].gainDB = (min(max(g, -12), 12) * 2).rounded() / 2
                         model.state.customTarget = model.state.target
                     }
-                    .onEnded { _ in dragID = nil }, including: isCustom ? .all : .none)
+                    .onEnded { _ in dragID = nil; dragStarted = false }, including: isCustom ? .all : .none)
         }
     }
 
@@ -189,7 +194,9 @@ struct TargetCurveView: View {
                         if let i = model.state.target.points.firstIndex(where: { $0.id == p.id }) {
                             GridRow {
                                 HStack(spacing: 4) {
-                                    TextField("Hz", value: $model.state.target.points[i].frequency, format: .number.precision(.significantDigits(1...4)))
+                                    TextField("Hz", value: Binding(get: { model.state.target.points[i].frequency },
+                                                                   set: { model.state.target.points[i].frequency = min(max($0, TargetCurve.frequencyRange.lowerBound), TargetCurve.frequencyRange.upperBound) }),
+                                              format: .number.precision(.significantDigits(1...4)))
                                         .frame(width: 80).multilineTextAlignment(.trailing)
                                     Text("Hz").foregroundStyle(.secondary)
                                 }

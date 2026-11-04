@@ -6,11 +6,11 @@ public struct BandDecay: Hashable, Sendable, Codable {
     public var centre: Double
     public var lower: Double
     public var upper: Double
-    /// The early decay time from the fit between 0 dB and -10 dB. It needs 10 dB of dynamic range.
+    /// The early decay time from the fit between 0 dB and -10 dB. It needs 20 dB of dynamic range.
     public var edt: Double?
-    /// The decay time from the fit between -5 dB and -25 dB. It needs 25 dB of dynamic range.
+    /// The decay time from the fit between -5 dB and -25 dB. It needs 35 dB of dynamic range, so the fit ends 10 dB above the noise.
     public var t20: Double?
-    /// The decay time from the fit between -5 dB and -35 dB. It needs 35 dB of dynamic range.
+    /// The decay time from the fit between -5 dB and -35 dB. It needs 45 dB of dynamic range, so the fit ends 10 dB above the noise.
     public var t30: Double?
     /// The noise power per sample in dB, relative to a digital value of 1.0.
     public var noiseFloorDB: Double
@@ -64,9 +64,9 @@ public enum RoomAcoustics {
                       let line = regression(i0...i1, db), line.slope < 0 else { return nil }
                 return -60 / (line.slope * sr)
             }
-            d.edt = decayTime(from: 0, to: -10, minRange: 10)
-            d.t20 = decayTime(from: -5, to: -25, minRange: 25)
-            d.t30 = decayTime(from: -5, to: -35, minRange: 35)
+            d.edt = decayTime(from: 0, to: -10, minRange: 20)
+            d.t20 = decayTime(from: -5, to: -25, minRange: 35)
+            d.t30 = decayTime(from: -5, to: -35, minRange: 45)
             return d
         }
     }

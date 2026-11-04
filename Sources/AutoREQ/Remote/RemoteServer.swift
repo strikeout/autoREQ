@@ -7,7 +7,7 @@ import Security
 ///
 /// Each request must carry the token, as `?token=…` or as `Authorization: Bearer …`.
 /// The server binds to 127.0.0.1 unless the user selects the LAN.
-@MainActor
+@MainActor @Observable
 final class RemoteServer {
     static let defaultPort: UInt16 = 52_770
     let token: String
@@ -18,15 +18,23 @@ final class RemoteServer {
     private let queue = DispatchQueue(label: "autoreq.remote")
     /// The server calls this when the listener stops with an error, for example when another app uses the port.
     var onFailure: ((String) -> Void)?
+    /// A cancelled listener holds its port until it reports `.cancelled`. A new start waits for that.
+    private var closing: NWListener?
+    private var pendingLAN: Bool?
+    private var connections = 0
+    /// The server refuses a connection above this count, so slow clients cannot use all the resources.
+    static let maxConnections = 32
+    /// The server closes a connection after this time, also when the request is not complete.
+    static let timeoutSeconds = 10.0
 
-    var isRunning: Bool { listener != nil }
+    var isRunning: Bool { listener != nil || pendingLAN != nil }
 
     /// - Parameter port: The TCP port. 0 lets the system select a free port; `port` then shows it when the server is ready.
     init(model: AppModel, port: UInt16 = RemoteServer.defaultPort) {
         self.model = model
         self.port = port
         var bytes = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess, "The system gave no random bytes for the token.")
         token = bytes.map { String(format: "%02x", $0) }.joined()
     }
 
@@ -36,8 +44,11 @@ final class RemoteServer {
         return "http://\(host):\(port)/?token=\(token)"
     }
 
+    /// Starts the listener. If an old listener still closes, the start waits until its port is free.
     func start(lan: Bool) throws {
-        stop()
+        if listener != nil { stop() }
+        self.lan = lan
+        if closing != nil { pendingLAN = lan; return }
         let params = NWParameters.tcp
         let p = NWEndpoint.Port(rawValue: port) ?? .any
         if !lan { params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: p) }
@@ -46,17 +57,41 @@ final class RemoteServer {
             Task { @MainActor in
                 guard let self else { return }
                 switch state {
-                case .ready: if let actual = l.port?.rawValue { self.port = actual }
+                case .ready:
+                    if self.listener === l, let actual = l.port?.rawValue { self.port = actual }
                 case .failed(let e):
+                    // A failure of an old listener must not stop the new one.
+                    guard self.listener === l else { return }
                     self.stop()
                     self.onFailure?("The server stopped: \(e.localizedDescription). Another app can use port \(self.port).")
+                case .cancelled:
+                    guard self.closing === l else { return }
+                    self.closing = nil
+                    if let next = self.pendingLAN {
+                        self.pendingLAN = nil
+                        do { try self.start(lan: next) } catch { self.onFailure?("The server did not start: \(error.localizedDescription)") }
+                    }
                 default: break
                 }
             }
         }
+        let q = queue
         l.newConnectionHandler = { [weak self] c in
-            c.start(queue: self?.queue ?? .main)
-            Task { @MainActor in self?.receive(c, buffer: Data()) }
+            Task { @MainActor in
+                guard let self, self.connections < Self.maxConnections else { c.cancel(); return }
+                self.connections += 1
+                c.stateUpdateHandler = { [weak self] st in
+                    // A failed connection still reports `.cancelled` after the cancel, so only that state counts.
+                    switch st {
+                    case .failed: c.cancel()
+                    case .cancelled: Task { @MainActor in self?.connections -= 1 }
+                    default: break
+                    }
+                }
+                c.start(queue: q)
+                q.asyncAfter(deadline: .now() + Self.timeoutSeconds) { c.cancel() }
+                self.receive(c, buffer: Data())
+            }
         }
         l.start(queue: queue)
         listener = l
@@ -64,8 +99,11 @@ final class RemoteServer {
     }
 
     func stop() {
-        listener?.cancel()
+        pendingLAN = nil
+        guard let l = listener else { return }
+        closing = l
         listener = nil
+        l.cancel()
     }
 
     // MARK: - HTTP
@@ -140,7 +178,9 @@ final class RemoteServer {
         case ("GET", "/api/response"):
             json(c, RemoteAPI.response(model, channel: r.query["channel"].flatMap(Int.init)))
         case ("GET", "/api/impulse"):
-            json(c, RemoteAPI.impulse(model, channel: r.query["channel"].flatMap(Int.init), ms: r.query["ms"].flatMap(Double.init) ?? 100))
+            // "nan" and "inf" parse as a Double, so the server keeps finite values only.
+            let ms = r.query["ms"].flatMap(Double.init).flatMap { $0.isFinite ? $0 : nil } ?? 100
+            json(c, RemoteAPI.impulse(model, channel: r.query["channel"].flatMap(Int.init), ms: ms))
         case ("GET", "/api/spectrum"):
             json(c, RemoteAPI.spectrum(model))
         case ("GET", "/api/spl"):
@@ -164,7 +204,11 @@ final class RemoteServer {
     }
 
     private func json(_ c: NWConnection, _ value: Any) {
-        let data = (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data("{}".utf8)
+        // A NaN or an infinite value makes JSONSerialization raise an exception that `try` cannot catch.
+        guard JSONSerialization.isValidJSONObject(value), let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else {
+            send(c, status: "500 Internal Server Error", type: "text/plain", body: Data("The values are not valid JSON.".utf8))
+            return
+        }
         send(c, status: "200 OK", type: "application/json", body: data)
     }
 
@@ -284,7 +328,8 @@ enum RemoteViewer {
         if(spl.available){document.getElementById('spl').innerHTML='<table>'+spl.meters.map(m=>'<tr><td class="dim">'+m.label+'</td><td>'+(m.value==null?'–':m.value.toFixed(1)+' dB')+'</td></tr>').join('')+'</table>'}
       }catch(e){document.getElementById('status').textContent='The connection is lost.'}
     }
-    tick();setInterval(tick,500);
+    async function loop(){await tick();setTimeout(loop,500)}
+    loop();
     </script></body></html>
     """
 }

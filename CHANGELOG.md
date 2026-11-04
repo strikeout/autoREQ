@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.8.2
+
+- The app no longer stops when you remove a speaker or a listening area on the Calibrate screen.
+- Extra mics, long sweeps and the SPL calibration now work at all sample rates. Before, the sample rings were too short.
+- Find in the phase delay control now flattens the phase. Before, it doubled the phase slope.
+- A delay tracker shift no longer makes the guided calibration skip a speaker.
+- The app removes extra mics, spectrum channels and SPL channels that the current mic device does not have.
+- The SPL log keeps its meters when you turn off a channel on the SPL screen.
+- A short tap on Test Speakers no longer leaves the noise on.
+- Stop Timer keeps the captures and adds no average. The averages now group by mic channel.
+- The clip warning uses the measured crest of an audio file and the real crest of a sweep. The output clips at full scale, so the reference stays equal to the output.
+- A new signal choice wins over an audio file that still loads. Auto Capture stops when the signal cannot start.
+- A WAV import keeps 10 ms before the peak and 10 s after it.
+- T20 and T30 need 35 dB and 45 dB of range, so each fit ends 10 dB above the noise (ISO 3382-1).
+- The delay tracker ignores a shift of one sample, so it no longer moves back and forth.
+- The impulse analyser uses only frames after a signal change. Before, a frame with the old signal could move the delay.
+- A reference snapshot no longer adds a phase slope from the latency of another engine run.
+- The remote server waits for the old port when it restarts. It closes a connection after 10 s and accepts 32 connections at most.
+- A request with ms=nan no longer stops the app. A value that is not valid JSON gives an error reply.
+- The Remote tab shows the correct network setting after you open it again. The token stays the same until the app quits.
+- On the Target Curve screen, a drag moves only the point under the pointer at the start. The frequency field stays in 20 Hz to 20 kHz. The custom points stay when you select a preset.
+
 ## v1.8.1
 
 - The Target Curve screen shows the presets as cards with a small preview of each curve.
