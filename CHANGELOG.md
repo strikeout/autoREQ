@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.8.3
+
+- The Room Analysis screen no longer stops the app after a sweep. Before, it drew the new impulse response with the old analysis for a moment.
+
 ## v1.8.2
 
 - The app no longer stops when you remove a speaker or a listening area on the Calibrate screen.

@@ -34,6 +34,8 @@ struct RoomView: View {
     }
 
     struct Result {
+        /// The impulse response that this result belongs to: its length, lag 0 and sample rate.
+        var irKey: [Double]?
         var etc: [Double]
         var reflections: [Reflection]
         var modes: [RoomMode]
@@ -43,6 +45,10 @@ struct RoomView: View {
         /// The energy-time curves of the compared snapshots, in their own time base.
         var overlays: [(name: String, color: Color, ir: ImpulseResponse, etc: [Double])] = []
     }
+
+    /// The view uses a result only for the impulse response it came from. A new sweep makes a longer
+    /// impulse response, and the old ETC is then too short for the charts.
+    static func key(_ ir: ImpulseResponse?) -> [Double]? { ir.map { [Double($0.samples.count), Double($0.zeroIndex), $0.sampleRate] } }
 
     private struct Key: Hashable {
         var source: Response?
@@ -92,13 +98,17 @@ struct RoomView: View {
                     Button("Import IR from WAV…") { model.importImpulses() }
                 }
                 if let r = source {
-                    if let ir = r.impulse, let res = result {
+                    // Show a result only while it matches the impulse response on the screen.
+                    let current = result.flatMap { $0.irKey == Self.key(r.impulse) && $0.etc.count == (r.impulse?.samples.count ?? 0) ? $0 : nil }
+                    if let ir = r.impulse, let res = current {
                         timeDomain(ir, res)
                     } else if r.impulse == nil {
                         Text("This measurement has no impulse response. The mode list uses the frequency response only, and it has no measured decay.")
                             .foregroundStyle(.orange)
+                    } else {
+                        ProgressView("Analysing the impulse response…").controlSize(.small)
                     }
-                    if let res = result {
+                    if let res = current {
                         HStack(alignment: .top, spacing: 16) {
                             if r.impulse != nil { reflectionTable(res.reflections) }
                             modeTable(res.modes)
@@ -126,7 +136,7 @@ struct RoomView: View {
             let b = banding
             result = await Task.detached(priority: .userInitiated) {
                 let etc = r.impulse.map(RoomAnalysis.etc) ?? []
-                var res = Result(etc: etc, reflections: r.impulse.map { RoomAnalysis.reflections($0, etc: etc) } ?? [],
+                var res = Result(irKey: RoomView.key(r.impulse), etc: etc, reflections: r.impulse.map { RoomAnalysis.reflections($0, etc: etc) } ?? [],
                                  modes: RoomAnalysis.modes(response: r, impulse: r.impulse))
                 if let ir = r.impulse {
                     res.decays = RoomAcoustics.bandDecays(ir, banding: b)
