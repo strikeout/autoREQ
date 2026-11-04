@@ -188,8 +188,8 @@ struct LevelsStage: View {
                 }
                 HStack {
                     Text("Test signal level")
-                    Slider(value: $session.noiseLevelDBFS, in: -40...(-6), step: 1) { _ in session.playLevelSpeaker() }.frame(width: 200)
-                    Text("\(Int(session.noiseLevelDBFS)) dBFS").monospacedDigit()
+                    Slider(value: $session.noiseLevelDBFS, in: -48...(-14), step: 1) { _ in session.playLevelSpeaker() }.frame(width: 200)
+                    Text("\(Int(session.noiseLevelDBFS)) dBFS RMS").monospacedDigit()
                 }
                 HStack {
                     Button("Previous speaker") { session.levelSpeakerIndex -= 1; session.playLevelSpeaker() }

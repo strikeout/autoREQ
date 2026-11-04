@@ -5,18 +5,13 @@ struct MeasureView: View {
     @Environment(AppModel.self) private var model
     @Binding var section: AppSection?
     let session: CalibrationSession
-    @State private var noiseChannel = 0
     @State private var showSettings = false
     @State private var editing: Snapshot?
-
-    private var channels: Set<Int> {
-        let n = model.engine?.outputChannelCount ?? model.outputDevice?.outputChannels ?? 2
-        return noiseChannel < 0 ? Set(0..<n) : [noiseChannel]
-    }
 
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 10) {
+            GeneratorControls().padding(.horizontal)
             toolbar
             ResponseChart(traces: traces, smoothing: model.state.smoothing, coherenceHide: model.state.coherenceHide.rawValue, scale: model.state.graphScale)
                 .padding(.horizontal)
@@ -38,20 +33,8 @@ struct MeasureView: View {
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Picker("Output", selection: $noiseChannel) {
-                Text("All channels").tag(-1)
-                ForEach(0..<(model.outputDevice?.outputChannels ?? 2), id: \.self) { c in
-                    Text(channelName(c)).tag(c)
-                }
-            }
-            .frame(width: 220)
-            if model.noiseChannels.isEmpty {
-                Button { Task { if await model.startEngine() { model.setNoise(channels) } } } label: { Label("Start Noise", systemImage: "play.fill") }
-            } else {
-                Button { model.setNoise([]) } label: { Label("Stop Noise", systemImage: "stop.fill") }
-            }
-            Button { Task { await model.autoCapture(channels: channels) } } label: { Label("Auto Capture", systemImage: "wand.and.rays") }
-                .disabled(model.autoCapturing)
+            Button { Task { await model.autoCapture() } } label: { Label("Auto Capture", systemImage: "wand.and.rays") }
+                .disabled(model.autoCapturing || model.state.generator.signal.kind.isTonal)
             Button { model.takeSnapshot() } label: { Label("Take Snapshot", systemImage: "camera") }
                 .disabled(model.live == nil || model.noiseChannels.isEmpty)
             Spacer()
@@ -62,17 +45,13 @@ struct MeasureView: View {
         .padding(.horizontal)
     }
 
-    private func channelName(_ c: Int) -> String {
-        let names = model.state.speakers.filter { $0.outputChannel == c }.map(\.name)
-        return "Ch \(c + 1)" + (names.isEmpty ? "" : " — " + names.joined(separator: ", "))
-    }
-
     private var statusPill: some View {
         let (text, color): (String, Color) = {
             if model.autoCapturing { return ("Waiting for a stable measurement \(Int(model.stability * 100))%", .yellow) }
             if model.engine == nil { return ("Engine off", .gray) }
             switch model.status {
-            case .measuring: return ("OK — \(model.status.label)", .green)
+            case .measuring: return ("OK — Measuring — playing \(model.playingSignal?.label ?? "noise")", .green)
+            case .tone: return (model.status.label, .orange)
             case .noDelay: return (model.status.label, .red)
             default: return (model.status.label, .gray)
             }

@@ -35,6 +35,18 @@ struct GraphScale: Codable, Hashable {
     var toHz = 20_000.0
 }
 
+/// The settings of the Spectrum screen.
+struct SpectrumSettings: Codable, Hashable {
+    /// The zero-based input channels of the mic device.
+    var channels: [Int] = [0]
+    var banding: Banding = .oct3
+    var averaging: Averaging = .fast
+    var peakHold = false
+    var spectrogramSeconds = 30.0
+    var floorDB = -100.0
+    var ceilingDB = -20.0
+}
+
 /// Everything the app saves between launches.
 struct PersistedState: Codable {
     var micDeviceUID: String?
@@ -60,6 +72,17 @@ struct PersistedState: Codable {
     var correctionStrengthStored: Double?
     var micCalibrationsStored: [MicCalibration]?
     var micCalibrationByDeviceStored: [String: String]?
+    var generatorStored: GeneratorPreset?
+    var generatorPresetsStored: [GeneratorPreset]?
+    var spectrumStored: SpectrumSettings?
+
+    /// The generator setup of the Measure and Spectrum screens. The guided calibration always uses pink noise.
+    var generator: GeneratorPreset {
+        get { generatorStored ?? GeneratorPreset(name: "Current", signal: .pink, levelDBFS: -20, channel: 0) }
+        set { generatorStored = newValue }
+    }
+    var generatorPresets: [GeneratorPreset] { get { generatorPresetsStored ?? [] } set { generatorPresetsStored = newValue } }
+    var spectrum: SpectrumSettings { get { spectrumStored ?? SpectrumSettings() } set { spectrumStored = newValue } }
 
     /// Calibration files that the user imported.
     var micCalibrations: [MicCalibration] { get { micCalibrationsStored ?? [] } set { micCalibrationsStored = newValue } }
@@ -90,6 +113,18 @@ final class AppModel {
     var noiseChannels: Set<Int> = []
     var autoCapturing = false
     var selectedSnapshotIDs: Set<UUID> = []
+    /// The signal that plays now on the Measure or Spectrum screen.
+    var playingSignal: SignalSettings?
+
+    // Spectrum
+    /// The averaged band levels of each input channel, with the mic calibration removed.
+    var spectrum: [Int: [Double]] = [:]
+    var spectrumPeak: [Int: [Double]] = [:]
+    /// The 1/24-octave frames of the spectrograph, oldest first. The engine adds 10 frames each second.
+    var spectrogram: [[Float]] = []
+    static let spectrogramMaxFrames = 3000
+    private var spectrumRunning = false
+    private var loadedFile: (path: String, rate: Double, samples: [Float])?
     var micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
 
     // Loopback
@@ -181,6 +216,7 @@ final class AppModel {
                 self.status = u.status
                 self.stability = u.stability
                 if let r = u.response { self.live = self.activeMicCalibration.map(r.removing(mic:)) ?? r }
+                if self.spectrumRunning { self.receiveSpectrum(u) }
                 if self.autoCapturing && u.stability >= 1 {
                     self.autoCapturing = false
                     self.takeSnapshot()
@@ -200,6 +236,8 @@ final class AppModel {
         engine?.shutdown()
         engine = nil
         noiseChannels = []
+        playingSignal = nil
+        spectrumRunning = false
         status = .idle
         live = nil
     }
@@ -211,11 +249,127 @@ final class AppModel {
         if wasRunning { await startEngine() }
     }
 
-    func setNoise(_ channels: Set<Int>, levelDBFS: Double = -12) {
+    /// Plays pink noise for the guided calibration, or stops the generator with an empty set.
+    func setNoise(_ channels: Set<Int>, levelDBFS: Double = -20) {
         noiseChannels = channels
+        playingSignal = channels.isEmpty ? nil : .pink
         if channels.isEmpty { autoCapturing = false }
         engine?.setNoise(channels: channels, levelDBFS: levelDBFS)
         if channels.isEmpty { status = .idle }
+    }
+
+    /// The output channels of the generator setup.
+    var generatorChannels: Set<Int> {
+        let n = engine?.outputChannelCount ?? outputDevice?.outputChannels ?? 2
+        let c = state.generator.channel
+        return c < 0 ? Set(0..<n) : [min(c, n - 1)]
+    }
+
+    /// Plays the generator setup of `state.generator`.
+    func startGenerator() async {
+        guard await startEngine(), let e = engine else { return }
+        let g = state.generator
+        var samples: [Float] = []
+        if g.signal.kind == .file {
+            guard let path = g.signal.filePath else { engineError = "Choose an audio file for the generator."; return }
+            if let f = loadedFile, f.path == path, f.rate == e.sampleRate {
+                samples = f.samples
+            } else {
+                do {
+                    samples = try await Task.detached { try AudioFileLoader.load(URL(fileURLWithPath: path), sampleRate: e.sampleRate) }.value
+                    loadedFile = (path, e.sampleRate, samples)
+                } catch {
+                    engineError = "The app cannot read \(URL(fileURLWithPath: path).lastPathComponent): \(error.localizedDescription)"
+                    return
+                }
+            }
+        }
+        let chans = generatorChannels
+        noiseChannels = chans
+        playingSignal = g.signal
+        // A tone gives no transfer function, so the last one must not stay on the screen.
+        if g.signal.kind.isTonal { live = nil }
+        e.setOutput(channels: chans, signal: g.signal, levelDBFS: g.levelDBFS, fileSamples: samples)
+    }
+
+    /// Applies a changed generator setup while the generator plays. A level change does not restart the analysis.
+    func generatorChanged() {
+        guard !noiseChannels.isEmpty, let e = engine else { return }
+        if playingSignal == state.generator.signal && noiseChannels == generatorChannels {
+            e.setLevel(state.generator.levelDBFS)
+        } else {
+            Task { await startGenerator() }
+        }
+    }
+
+    func savePreset(named name: String) {
+        var p = state.generator
+        p.name = name
+        state.generatorPresets.removeAll { $0.name == name }
+        state.generatorPresets.append(p)
+    }
+
+    func applyPreset(_ p: GeneratorPreset) {
+        state.generator = p
+        generatorChanged()
+    }
+
+    func chooseGeneratorFile() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        panel.message = "Choose a WAV, AIFF or other audio file. The app plays it as the measurement signal."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        state.generator.signal.kind = .file
+        state.generator.signal.filePath = url.path
+        generatorChanged()
+    }
+
+    // MARK: Spectrum
+
+    var spectrumBands: [Band] { Band.bands(state.spectrum.banding) }
+    nonisolated static let spectrogramBands = Band.bands(.oct24)
+
+    func startSpectrum() async {
+        // The demo model of the screenshot mode shows its own data and uses no audio device.
+        guard persists, await startEngine() else { return }
+        spectrumRunning = true
+        spectrumSettingsChanged()
+    }
+
+    func stopSpectrum() {
+        spectrumRunning = false
+        engine?.setSpectrum(channels: [], banding: state.spectrum.banding, averaging: state.spectrum.averaging)
+    }
+
+    /// Sends the spectrum settings to the engine and clears the peak hold.
+    func spectrumSettingsChanged() {
+        spectrum = [:]
+        spectrumPeak = [:]
+        guard spectrumRunning else { return }
+        let s = state.spectrum
+        engine?.setSpectrum(channels: s.channels, banding: s.banding, averaging: s.averaging)
+    }
+
+    func resetSpectrum() {
+        spectrumPeak = [:]
+        engine?.resetSpectrum()
+    }
+
+    private func receiveSpectrum(_ u: MeasurementEngine.Update) {
+        let bands = spectrumBands
+        let cal = activeMicCalibration
+        for (c, raw) in u.spectrum where raw.count == bands.count {
+            let levels = c == state.micChannel && cal != nil ? zip(raw, bands).map { $0 - cal!.gain(at: $1.centre) } : raw
+            spectrum[c] = levels
+            if state.spectrum.peakHold { spectrumPeak[c] = spectrumPeak[c].map { zip($0, levels).map(max) } ?? levels }
+        }
+        if var f = u.spectrogramFrame, f.count == Self.spectrogramBands.count {
+            if state.spectrum.channels.first == state.micChannel, let cal {
+                for i in f.indices { f[i] -= Float(cal.gain(at: Self.spectrogramBands[i].centre)) }
+            }
+            spectrogram.append(f)
+            if spectrogram.count > Self.spectrogramMaxFrames { spectrogram.removeFirst(spectrogram.count - Self.spectrogramMaxFrames) }
+        }
     }
 
     func setAveraging(_ a: Averaging) {
@@ -223,10 +377,10 @@ final class AppModel {
         engine?.setAveraging(a)
     }
 
-    func autoCapture(channels: Set<Int>) async {
+    func autoCapture() async {
         guard await startEngine() else { return }
         autoCapturing = true
-        setNoise(channels)
+        await startGenerator()
     }
 
     // MARK: Mic calibration

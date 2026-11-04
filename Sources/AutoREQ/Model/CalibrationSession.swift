@@ -16,7 +16,8 @@ final class CalibrationSession {
     // Levels
     var noiseFloorDB: Double?
     var levelSpeakerIndex = 0
-    var noiseLevelDBFS = -12.0
+    /// The RMS level of the pink noise. Its peaks are about 13 dB higher.
+    var noiseLevelDBFS = -20.0
 
     // Measure
     var position = 0

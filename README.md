@@ -15,6 +15,11 @@ The Measure screen compares the snapshots of the three speakers. It shows the ma
 
 ![The Measure screen with three speaker snapshots](docs/screenshots/measure.png)
 
+The Spectrum screen shows an RTA in 1/3-octave bands with a peak hold, and a spectrograph. In
+the spectrograph, the pink noise starts after 8 s of room noise.
+
+![The Spectrum screen with an RTA and a spectrograph](docs/screenshots/spectrum.png)
+
 The results page shows each channel after the correction, with the target curve as a dashed line.
 
 ![The calibration results with the corrected response of each channel](docs/screenshots/calibration-results.png)
@@ -34,9 +39,15 @@ The Target Curve screen shows the selected preset or your custom curve.
 
 ## Features
 
-- **Measure:** The app plays pink noise and shows the transfer function of the speaker. The chart
-  shows the magnitude, the phase and the coherence. You can keep snapshots and compare them. You
-  can also export a snapshot to CSV and import a CSV again.
+- **Measure:** The app plays a test signal and shows the transfer function of the speaker. The
+  chart shows the magnitude, the phase and the coherence. You can keep snapshots and compare them.
+  You can also export a snapshot to CSV and import a CSV again.
+- **Generator:** The generator plays pink noise, white noise or periodic pink noise. It also plays
+  a sine tone, a dual sine or an audio file. The level is an RMS level in dBFS. Presets keep the signal, the
+  level and the output channel.
+- **Spectrum:** The RTA shows the spectrum of up to 8 inputs in bands from 1/1 octave to 1/48
+  octave. It has the averaging modes of the Measure screen and a peak hold. The spectrograph
+  shows the last 10 s to 5 min as a color map.
 - **Calibrate:** A guided procedure measures each speaker at one or more mic positions. The app
   then calculates the crossover, the level, the delay, the polarity and up to 48 EQ filters for
   each speaker.
@@ -108,14 +119,37 @@ open -W build/AutoREQ.app --args --screenshots "$PWD/docs/screenshots"
 
 ### Measure a speaker
 
-> **Warning:** The test signal is pink noise at −12 dBFS. Set your amplifier to a low volume before
-> you start the noise.
+> **Warning:** The default test signal is pink noise at −20 dBFS RMS. Its peaks are about 13 dB
+> higher. Set your amplifier to a low volume before you start the generator.
 
 1. Open **Measure**.
-2. Select the output channel of the speaker.
-3. Click **Start Noise**.
+2. Select the signal and the output channel of the speaker.
+3. Click **Start**.
 4. Wait until the status shows "OK — Measuring".
 5. Click **Take Snapshot**, or use **Auto Capture**. Auto Capture stops when the reading is stable.
+
+### Select a test signal
+
+- Pink noise is the default signal. It has the same energy in each octave.
+- Periodic pink noise repeats every 1.4 s. The impulse response is then exact, so the Room
+  Analysis screen needs fewer averages.
+- An audio file lets you measure with music. The transfer function is correct only where the
+  music has energy, so check the coherence.
+- A sine tone or a dual sine is for the RTA. A tone gives no transfer function.
+
+If the level is too high for the signal, the generator shows "Peaks clip". Decrease the level until
+the warning goes away.
+
+### Use the spectrum screen
+
+1. Open **Spectrum**.
+2. In **Inputs**, select one or more input channels of the mic device.
+3. Select the band width and the averaging mode.
+4. Turn on **Peak hold** to keep the highest level of each band. Click **Reset** to clear it.
+5. Start the generator if you want a test signal. The RTA also works with music or room noise.
+
+The levels are in dBFS. The app does not know the absolute sound pressure level yet. Pink noise at
+−20 dBFS RMS reads about −36 dB in each 1/3-octave band.
 
 ### Calibrate the room
 
@@ -187,6 +221,9 @@ or `FAIL`.
 - The crossover is always a 4th-order Linkwitz-Riley filter.
 - The impulse response is about 0.7 s long. The analysis cannot measure a decay longer than
   about 0.5 s.
+- The RTA uses one FFT of 16384 samples. Below about 40 Hz, a band of 1/24 or 1/48 octave is
+  narrower than one FFT bin. Adjacent bands then show the same level.
+- The generator plays the first 5 minutes of an audio file only.
 - Only live measurements have an impulse response. An imported CSV file has none. For such a
   file, the app shows no reflections and no measured decay.
 

@@ -20,10 +20,10 @@ enum SelfTest {
         catch { say("FAIL engine: \(error.localizedDescription)"); return 1 }
         var last: MeasurementEngine.Update?
         engine.onUpdate = { last = $0 }
-        engine.setNoise(channels: [0], levelDBFS: -12)
+        engine.setSpectrum(channels: [0], banding: .oct3, averaging: .fifo32)
+        engine.setNoise(channels: [0], levelDBFS: -20)
         try? await Task.sleep(for: .seconds(6))
-        engine.shutdown()
-        guard let u = last, let r = u.response else { say("FAIL no response; status \(String(describing: last?.status))"); return 1 }
+        guard let u = last, let r = u.response else { engine.shutdown(); say("FAIL no response; status \(String(describing: last?.status))"); return 1 }
         let band = (FrequencyGrid.index(of: 50))...(FrequencyGrid.index(of: 15_000))
         let mag = r.magnitudeDB[band].reduce(0, +) / Double(band.count)
         let spread = (r.magnitudeDB[band].max() ?? 0) - (r.magnitudeDB[band].min() ?? 0)
@@ -41,7 +41,39 @@ enum SelfTest {
         } else {
             say("no impulse response")
         }
-        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK
+
+        // Pink noise has the same energy in each 1/3-octave band.
+        let bands = Band.bands(.oct3)
+        var rtaOK = false
+        if let lv = u.spectrum[0] {
+            let used = bands.indices.filter { bands[$0].centre >= 100 && bands[$0].centre <= 10_000 }
+            let mean = used.map { lv[$0] }.reduce(0, +) / Double(used.count)
+            let dev = used.map { abs(lv[$0] - mean) }.max() ?? 99
+            say(String(format: "rta pink: band level %.1f dBFS, largest deviation %.2f dB (100 Hz–10 kHz)", mean, dev))
+            rtaOK = dev < 1
+        } else { say("no spectrum") }
+
+        // A sine at -20 dBFS RMS reads -20 dB in its band.
+        engine.setOutput(channels: [0], signal: SignalSettings(kind: .sine, frequency: 1000), levelDBFS: -20)
+        engine.resetSpectrum()
+        try? await Task.sleep(for: .seconds(2))
+        let k = bands.firstIndex { abs($0.centre - 1000) < 1 }!
+        let sineLevel = last?.spectrum[0]?[k] ?? -200
+        say(String(format: "rta sine: 1 kHz band %.2f dB, status %@", sineLevel, last?.status.label ?? "-"))
+        let sineOK = abs(sineLevel + 20) < 0.5 && last?.status == .tone
+
+        // Periodic pink noise gives the impulse response with no window error.
+        engine.setOutput(channels: [0], signal: SignalSettings(kind: .periodicPink), levelDBFS: -20)
+        try? await Task.sleep(for: .seconds(6))
+        engine.shutdown()
+        var periodicOK = false
+        if let ir = last?.response?.impulse, let peak = ir.samples.indices.max(by: { abs(ir.samples[$0]) < abs(ir.samples[$1]) }) {
+            let refl = RoomAnalysis.reflections(ir)
+            say(String(format: "periodic pink: impulse peak %.3f at %.2f ms, %d reflections", ir.samples[peak], ir.timeMs(peak), refl.count))
+            periodicOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty && ir.samples[peak] > 0.8
+        } else { say("periodic pink: no impulse response") }
+
+        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK
         say(ok ? "PASS" : "FAIL")
         return ok ? 0 : 1
     }

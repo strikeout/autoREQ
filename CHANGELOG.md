@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.2.0
+
+- The generator plays pink noise, white noise, periodic pink noise, a sine tone, a dual sine or an audio file.
+- The generator level is now an RMS level in dBFS. The old pink noise was 7.5 dB below its nominal level. The new default of −20 dBFS RMS gives the same loudness as the old default.
+- Generator presets keep the signal, the level and the output channel.
+- The new Spectrum screen shows an RTA of up to 8 inputs with a peak hold. The bands are 1/1 octave to 1/48 octave wide.
+- The Spectrum screen also shows a spectrograph of the last 10 s to 5 min.
+- With periodic pink noise, the impulse response is exact after one frame.
+- The self-test also checks the RTA, a sine level and the periodic pink noise.
+
 ## v1.1.0
 
 - The new Room Analysis screen shows the impulse response and the energy-time curve of a measurement.

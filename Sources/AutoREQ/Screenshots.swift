@@ -15,7 +15,8 @@ enum Screenshots {
         let session = CalibrationSession(app: model)
         session.stage = .results
         model.live = model.state.snapshots.first?.response
-        let shots: [(String, AppSection)] = [("measure", .measure), ("calibration-results", .calibrate), ("room-analysis", .room),
+        demoSpectrum(model)
+        let shots: [(String, AppSection)] = [("measure", .measure), ("spectrum", .spectrum), ("calibration-results", .calibrate), ("room-analysis", .room),
                                              ("loopback", .loopback), ("target-curve", .target)]
         for (name, section) in shots {
             let root = ContentView(section: section, session: session)
@@ -43,6 +44,27 @@ enum Screenshots {
             window.orderOut(nil)
         }
         return 0
+    }
+
+    /// An RTA and a spectrograph of pink noise through the left speaker. The noise starts after 8 s of room noise.
+    static func demoSpectrum(_ model: AppModel) {
+        guard let room = model.state.snapshots.first?.response else { return }
+        model.state.spectrum.peakHold = true
+        var seed: UInt64 = 0xA11CE
+        func jitter(_ dB: Double) -> Double {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return (Double(seed >> 11) / Double(1 << 53) * 2 - 1) * dB
+        }
+        // Pink noise at -20 dBFS RMS gives about -36 dB in each 1/3-octave band.
+        func level(_ f: Double, perBand: Double) -> Double { -20 + perBand + room.magnitudeDB[FrequencyGrid.index(of: f)] }
+        func floorLevel(_ f: Double, perBand: Double) -> Double { -100 + perBand + 12 * max(0, log2(200 / f)) }
+        let bands = model.spectrumBands, perBand3 = 10 * log10(1 / 30.0)
+        model.spectrum[0] = bands.map { level($0.centre, perBand: perBand3) + jitter(0.4) }
+        model.spectrumPeak[0] = bands.map { level($0.centre, perBand: perBand3) + 1.5 + jitter(0.3) }
+        let fine = AppModel.spectrogramBands, perBand24 = 10 * log10(1 / 240.0)
+        model.spectrogram = (0..<300).map { t in
+            fine.map { b in Float(t < 80 ? floorLevel(b.centre, perBand: perBand24) + jitter(3) : level(b.centre, perBand: perBand24) + jitter(2.5)) }
+        }
     }
 
     /// A simulated stereo pair and subwoofer in a room with typical modes and a calculated correction.
