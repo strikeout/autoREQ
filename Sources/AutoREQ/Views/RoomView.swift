@@ -14,6 +14,18 @@ struct RoomView: View {
     @State private var sweepSeconds = 2.0
     @State private var sweepRepeats = 2
     @State private var sweepPeak = -12.0
+    @State private var speechDBA = 60.0
+    @State private var noiseBands: [Double]?
+    @State private var auditory = true
+    @State private var sti: STIResult?
+    @State private var measuringNoise = false
+
+    private struct STIKey: Hashable {
+        var ir: ImpulseResponse?
+        var speech: Double
+        var noise: [Double]?
+        var auditory: Bool
+    }
 
     enum Span: Double, CaseIterable, Identifiable {
         case ms20 = 20, ms50 = 50, ms100 = 100, ms300 = 300, all = 1000
@@ -92,6 +104,7 @@ struct RoomView: View {
                             modeTable(res.modes)
                         }
                         if r.impulse != nil { decayTable(res) }
+                        if r.impulse != nil { stiBox }
                     }
                     if let d = snapshot?.distortion, !d.isEmpty { distortionChart(d) }
                 } else {
@@ -99,6 +112,13 @@ struct RoomView: View {
                 }
             }
             .padding(24)
+        }
+        .task(id: STIKey(ir: source?.impulse, speech: speechDBA, noise: noiseBands, auditory: auditory)) {
+            guard let ir = source?.impulse else { sti = nil; return }
+            let (s, n, a) = (speechDBA, noiseBands, auditory)
+            sti = await Task.detached(priority: .userInitiated) {
+                SpeechTransmission.analyze(ir, speechLevelDBA: s, noiseBandLevels: n, auditoryEffects: a)
+            }.value
         }
         .task(id: Key(source: source, compare: compareIDs, banding: banding)) {
             guard let r = source else { result = nil; return }
@@ -265,6 +285,60 @@ struct RoomView: View {
                 }
                 .pickerStyle(.segmented).frame(width: 220)
             }
+        }
+    }
+
+    // MARK: - Speech intelligibility
+
+    private var stiBox: some View {
+        GroupBox("Speech intelligibility (STI)") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 14) {
+                    Stepper("Speech level \(Int(speechDBA)) dB(A)", value: $speechDBA, in: 40...100, step: 1).fixedSize()
+                    Toggle("Auditory masking and threshold", isOn: $auditory)
+                    if let n = noiseBands {
+                        Text("Noise: " + zip(SpeechTransmission.bands, n).map { String(format: "%@ %.0f", Band(centre: $0.0, lower: $0.0, upper: $0.0).label, $0.1) }.joined(separator: " · "))
+                            .font(.caption).monospacedDigit()
+                        Button("Clear Noise") { noiseBands = nil }
+                    } else if measuringNoise {
+                        ProgressView().controlSize(.small)
+                        Text("Reading the room noise for 5 s…").foregroundStyle(.secondary)
+                    } else {
+                        Button("Measure Background Noise") {
+                            measuringNoise = true
+                            Task { noiseBands = await model.measureNoiseBands(channel: model.state.micChannel); measuringNoise = false }
+                        }
+                    }
+                    Spacer()
+                }
+                if let s = sti {
+                    HStack(alignment: .top, spacing: 30) {
+                        VStack(alignment: .leading) {
+                            Text("STI").font(.caption).foregroundStyle(.secondary)
+                            Text(String(format: "%.2f", s.sti)).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                            Text("Class \(s.rating)").foregroundStyle(.secondary)
+                        }
+                        VStack(alignment: .leading) {
+                            Text("STIPA").font(.caption).foregroundStyle(.secondary)
+                            Text(String(format: "%.2f", s.stipa)).font(.system(size: 34, weight: .semibold, design: .rounded)).monospacedDigit()
+                            Text("Class \(s.stipaRating)").foregroundStyle(.secondary)
+                        }
+                        Chart {
+                            ForEach(Array(zip(s.bands, s.mti).enumerated()), id: \.offset) { _, p in
+                                BarMark(x: .value("Band", Band(centre: p.0, lower: p.0, upper: p.0).label), y: .value("MTI", p.1))
+                                    .foregroundStyle(.yellow)
+                            }
+                        }
+                        .chartYScale(domain: 0...1)
+                        .chartYAxisLabel("Transmission index")
+                        .frame(height: 140)
+                    }
+                    ForEach(s.notes, id: \.self) { Text($0).font(.caption).foregroundStyle(.orange) }
+                }
+                Text("The app calculates the STI from the impulse response with the indirect method of IEC 60268-16. Without measured noise, the STI shows the room and the speaker only. The values of the masking model come from the published rev-4 model and are not checked against the text of edition 5.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(6)
         }
     }
 

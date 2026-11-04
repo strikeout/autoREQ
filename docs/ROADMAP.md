@@ -193,6 +193,9 @@ Effort: large. Risk: medium.
 
 ## Phase 6 — v1.7.0: STI and STIPA
 
+Status: done in v1.7.0. The analytic tests pass. The check against the IEC test signals is not
+done, because the app has no copy of them.
+
 1. Calculate the modulation transfer function from the impulse response. Use the indirect method
    of IEC 60268-16 for 7 octave bands and 14 modulation frequencies.
 2. Add the background noise from the SPL meter, the level-dependent masking and the auditory

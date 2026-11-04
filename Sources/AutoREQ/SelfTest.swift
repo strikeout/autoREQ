@@ -94,7 +94,10 @@ enum SelfTest {
             let thd = sweep.distortion(fromRecorded: y).filter { $0.frequency >= 50 && $0.frequency <= 5000 }.map(\.thdPercent).max() ?? 100
             let pk = ir.samples.indices.max { abs(ir.samples[$0]) < abs(ir.samples[$1]) } ?? 0
             say(String(format: "sweep: impulse peak %.3f at %.2f ms, largest THD %.4f %% (50 Hz–5 kHz)", ir.samples[pk], ir.timeMs(pk), thd))
-            sweepOK = abs(ir.timeMs(pk)) < 0.1 && ir.samples[pk] > 0.7 && thd < 0.01
+            // A wire transmits speech perfectly, so the STI is about 1.
+            let sti = SpeechTransmission.analyze(ir, auditoryEffects: false).sti
+            say(String(format: "sweep: STI %.3f", sti))
+            sweepOK = abs(ir.timeMs(pk)) < 0.1 && ir.samples[pk] > 0.7 && thd < 0.01 && sti > 0.95
         } else { say("sweep: no period recorded") }
 
         // Periodic pink noise gives the impulse response with no window error.

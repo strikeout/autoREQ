@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.7.0
+
+- The Room Analysis screen shows the STI, the STIPA and the class of a measurement.
+- The screen also shows the transmission index of each octave band.
+- You can set the speech level and turn the auditory masking and threshold on or off.
+- The app can read the background noise in octave bands from a calibrated mic and include it in the STI.
+- The self-test also checks that the loopback has an STI near 1.
+
 ## v1.6.0
 
 - The optional phase correction adds all-pass filters, so the subs and the tops stay in phase at the crossover.

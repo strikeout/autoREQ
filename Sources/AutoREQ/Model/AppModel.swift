@@ -485,6 +485,29 @@ final class AppModel {
             + (hi - lo > 0.1 ? " The latency changes between runs. Use one interface for the mic and the speakers, or turn on Track Delay." : "")
     }
 
+    // MARK: Background noise for STI
+
+    /// Reads the octave-band noise levels from 125 Hz to 8 kHz on `channel` for 5 s, in dB SPL.
+    /// The generator must be off, and the channel needs an SPL calibration.
+    func measureNoiseBands(channel: Int) async -> [Double]? {
+        guard let off = splCalibration(channel) else { engineError = "Calibrate Ch \(channel + 1) on the SPL screen first."; return nil }
+        guard await startEngine(), let e = engine else { return nil }
+        setNoise([])
+        spectrum = [:]
+        engineBanding = .oct1
+        spectrumRunning = true
+        e.setSpectrum(channels: [channel], banding: .oct1, averaging: .slow)
+        try? await Task.sleep(for: .seconds(5))
+        let bands = Band.bands(.oct1), levels = spectrum[channel]
+        spectrumRunning = false
+        e.setSpectrum(channels: [], banding: .oct1, averaging: .slow)
+        guard let levels, levels.count == bands.count else { return nil }
+        return SpeechTransmission.bands.map { f in
+            let i = bands.indices.min { abs(log2(bands[$0].centre / f)) < abs(log2(bands[$1].centre / f)) }!
+            return levels[i] + off
+        }
+    }
+
     // MARK: SPL
 
     private func splKey(_ channel: Int) -> String { "\(state.micDeviceUID ?? "")#\(channel)" }

@@ -163,6 +163,10 @@ cat version.txt
   alignment runs again, because an all-pass changes the phase at the crossover.
 - `CalibrationSession.measurements` keeps the area index of each position. `ListeningArea.combine`
   gives each area its weight, whatever its number of positions. The main area is first.
+- `SpeechTransmission.analyze` filters the impulse response in octaves with a zero-phase FFT filter.
+  A simplified Lundeby method truncates the decay. `STIResult.mtf` is the corrected MTF.
+- The masking slope, the reception threshold and the male speech spectrum in
+  `SpeechTransmission.swift` are from memory of the standard. Check them against IEC 60268-16 ed. 5.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

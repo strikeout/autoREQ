@@ -71,6 +71,8 @@ The Target Curve screen shows the selected preset or your custom curve.
   app shows EDT, T20, T30, C50, C80 and D50 in octave bands or 1/3-octave bands. It also shows Ts
   and the direct-to-reverberant ratio. You can compare impulse responses, and export or import
   them as WAV files.
+- **Speech intelligibility:** The app calculates the STI and the STIPA from an impulse response
+  with the indirect method of IEC 60268-16. It can include the measured background noise.
 - **SPL meter:** The SPL screen calibrates each input with a 94 dB or 114 dB calibrator. It shows
   A, C and Z levels with Fast, Slow and Impulse time weighting, Leq, Lmax and peaks. It also shows
   the OSHA and NIOSH noise dose, and the band levels. A log writes one CSV line each second.
@@ -224,6 +226,10 @@ To measure with a sweep:
 A longer sweep and more repeats give more range above the room noise. A decay time shows only
 when its band has enough range.
 
+The **Speech intelligibility (STI)** box shows the STI, the STIPA and the class of a measurement.
+Set the speech level at the listener. To include the room noise, calibrate the mic on the SPL
+screen, turn off all sound sources, then click **Measure Background Noise**.
+
 A reflection 1 ms to 5 ms after the direct sound often comes from the desk, the floor or a near
 wall. Absorption or a different speaker position can decrease it. EQ cannot remove a reflection.
 
@@ -297,6 +303,8 @@ or `FAIL`.
 - In the treble, the short window of the FTW treats late reflections as noise. The coherence there
   is then lower than with one long window.
 - The time alignment uses the phase of the first position of the main area only.
+- The STI uses values of the IEC 60268-16 masking model from the published rev-4 model. Nobody has
+  checked them against the text of edition 5 or its test signals.
 - The thresholds of the diagnostic cards come from synthetic tests. Check a card against your
   room before you act on it.
 - The crossover is always a 4th-order Linkwitz-Riley filter.
