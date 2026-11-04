@@ -59,6 +59,10 @@ The Target Curve screen shows the selected preset or your custom curve.
   measurement. It lists the reflections in the first 100 ms with the delay, the level and the
   extra path length. It also lists the room modes from 15 Hz to 300 Hz with the frequency, the
   level, the Q and the decay time (T60).
+- **Sweep measurement:** A log sweep gives a 2 s impulse response and the harmonic distortion. The
+  app shows EDT, T20, T30, C50, C80 and D50 in octave bands or 1/3-octave bands. It also shows Ts
+  and the direct-to-reverberant ratio. You can compare impulse responses, and export or import
+  them as WAV files.
 - **Target curves:** Five preset curves are available. You can also make a custom curve from
   points.
 - **Loopback:** The app captures the system audio from a virtual audio device. It applies the
@@ -192,6 +196,16 @@ The levels are in dBFS. The app does not know the absolute sound pressure level 
 3. Open **Room Analysis**, and select the snapshot.
 4. Select a time span for the charts.
 
+To measure with a sweep:
+
+1. Open **Room Analysis**.
+2. In **Measure with a log sweep**, select the output channel, the length and the number of sweeps.
+3. Click **Measure**. The app keeps one snapshot for each mic.
+4. Select the new snapshot. The page then shows the decay and clarity table and the distortion.
+
+A longer sweep and more repeats give more range above the room noise. A decay time shows only
+when its band has enough range.
+
 A reflection 1 ms to 5 ms after the direct sound often comes from the desk, the floor or a near
 wall. Absorption or a different speaker position can decrease it. EQ cannot remove a reflection.
 
@@ -249,8 +263,8 @@ or `FAIL`.
   is then lower than with one long window.
 - The calibration does not include a phase correction pass or extra listening areas.
 - The crossover is always a 4th-order Linkwitz-Riley filter.
-- The impulse response is about 0.7 s long. The analysis cannot measure a decay longer than
-  about 0.5 s.
+- The live impulse response is about 0.7 s long. Use a sweep for a decay longer than about 0.5 s.
+  The sweep impulse response is 2 s long, so it cannot measure a decay longer than about 1.5 s.
 - The RTA uses one FFT of 16384 samples. Below about 40 Hz, a band of 1/24 or 1/48 octave is
   narrower than one FFT bin. Adjacent bands then show the same level.
 - The generator plays the first 5 minutes of an audio file only.

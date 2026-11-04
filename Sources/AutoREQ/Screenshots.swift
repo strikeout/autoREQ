@@ -24,7 +24,7 @@ enum Screenshots {
                 .preferredColorScheme(.dark)
                 .tint(.yellow)
             // The room analysis page is long, so its image is taller.
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: section == .room ? 1000 : 860),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: section == .room ? 1400 : 860),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
             window.title = "AutoREQ"

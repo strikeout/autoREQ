@@ -149,6 +149,11 @@ cat version.txt
 - Delay tracking (the setting `clockDrift`) replaces the old search every 3 s. It reads the
   GCC-PHAT peak of the newest impulse frame. A shift must show in two frames in a row.
 - The mic calibration of the main mic has the device UID as its key. An extra mic uses `uid#channel`.
+- The sweep measurement plays `SignalKind.logSweep`: one sweep and 2 s of silence, looped. The
+  render thread stores the reference index of each table start in `periodStart`.
+  `MeasurementEngine.lastPeriod` reads one aligned period for each mic.
+- `LogSweep.impulse` deconvolves with a regularised division, so a wire gives a peak of about 0.81
+  at 48 kHz. That is the peak of a 20 Hz–20 kHz band-limited impulse, and the in-band gain is 1.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

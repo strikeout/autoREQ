@@ -1,3 +1,4 @@
+import Accelerate
 import AppKit
 import AutoREQCore
 import AVFoundation
@@ -16,6 +17,8 @@ struct Snapshot: Codable, Identifiable, Hashable {
     var offsetDelayMs = 0.0
     var offsetGainDB = 0.0
     var inverted = false
+    /// The harmonic distortion of a sweep measurement. Other snapshots have none.
+    var distortion: [HarmonicPoint]?
 
     var displayed: Response { response.offset(delayMs: offsetDelayMs, gainDB: offsetGainDB, inverted: inverted) }
     var color: Color { Color(hex: colorHex) }
@@ -132,6 +135,8 @@ final class AppModel {
     var live: Response?
     /// The live response of each mic channel, with its mic calibration removed.
     var liveByChannel: [Int: Response] = [:]
+    /// The progress text of a sweep measurement. Nil when no sweep measurement runs.
+    var sweepProgress: String?
     /// The progress of the capture timer, for example (2, 6). Nil when the timer does not run.
     var timerProgress: (done: Int, total: Int)?
     private var timerTask: Task<Void, Never>?
@@ -424,7 +429,7 @@ final class AppModel {
 
     var allMicCalibrations: [MicCalibration] { MicCalibration.builtIn + state.micCalibrations }
 
-    /// The calibration of the main mic, if one is chosen.
+    /// The calibration of the main mic, if the user selected one.
     var activeMicCalibration: MicCalibration? { micCalibration(for: state.micChannel) }
 
     /// The key of a mic channel in `micCalibrationByDevice`. The main mic uses the device UID alone,
@@ -434,7 +439,7 @@ final class AppModel {
         return channel == state.micChannel ? uid : "\(uid)#\(channel)"
     }
 
-    /// The calibration of the mic on `channel`, if one is chosen.
+    /// The calibration of the mic on `channel`, if the user selected one.
     func micCalibration(for channel: Int) -> MicCalibration? {
         guard let key = calibrationKey(channel), let name = state.micCalibrationByDevice[key] else { return nil }
         return allMicCalibrations.first { $0.name == name }
@@ -487,10 +492,100 @@ final class AppModel {
         return added
     }
 
-    /// The reference snapshot. The Measure screen shows every other trace relative to it.
+    /// The property returns the reference snapshot. The Measure screen shows every other trace relative to it.
     var referenceSnapshot: Snapshot? {
         guard let id = state.referenceSnapshotIDStored else { return nil }
         return state.snapshots.first { $0.id == id }
+    }
+
+    // MARK: Sweep measurement
+
+    /// Plays `repeats` log sweeps on `channel` and keeps one snapshot for each mic.
+    /// The snapshot holds the impulse response, the transfer function and the distortion.
+    func measureSweep(channel: Int, seconds: Double, repeats: Int, peakDBFS: Double) async {
+        guard await startEngine(), let e = engine else { return }
+        let rate = e.sampleRate
+        let table = SignalGenerator.sweepTable(seconds: seconds, sampleRate: rate)
+        let period = table.count
+        // The generator scales the table to an RMS of 1.0. This level gives the sweep the requested peak.
+        let rms = Double(vDSP.rootMeanSquare(table))
+        let level = peakDBFS + 20 * log10(rms)
+        let oldStart = e.periodStart
+        let signal = SignalSettings(kind: .logSweep, sweepSeconds: seconds)
+        noiseChannels = [channel]
+        playingSignal = signal
+        sweepProgress = "Waiting for the sweep…"
+        e.setOutput(channels: [channel], signal: signal, levelDBFS: level)
+        defer { sweepProgress = nil }
+
+        // The first sweep starts when the table starts. Earlier periods hold the old signal.
+        var firstStart: Int?
+        var sums: [Int: [Float]] = [:], offsets: [Int: Int] = [:]
+        var used: Set<Int> = []
+        let deadline = Date().addingTimeInterval(Double(period) / rate * Double(repeats + 3) + 5)
+        while used.count < repeats && Date() < deadline && !noiseChannels.isEmpty {
+            try? await Task.sleep(for: .milliseconds(200))
+            if firstStart == nil, e.periodStart != oldStart, e.periodStart >= 0 { firstStart = e.periodStart }
+            guard let first = firstStart, let p = e.lastPeriod(length: period), p.start >= first, !used.contains(p.start) else { continue }
+            used.insert(p.start)
+            for (c, y) in p.data {
+                sums[c] = sums[c].map { vDSP.add($0, y) } ?? y
+                offsets[c] = p.offsets[c]
+            }
+            sweepProgress = "Sweep \(used.count) of \(repeats)"
+        }
+        setNoise([])
+        guard used.count == repeats else {
+            engineError = used.isEmpty ? "The sweep gave no signal at the mic. Check the levels and the routing." : "The sweep measurement stopped early."
+            return
+        }
+        sweepProgress = "Calculating…"
+        // Divide by the sweep peak as well, so the levels are relative to the played sweep.
+        let n = Float(repeats) * Float(pow(10, peakDBFS / 20))
+        let results = await Task.detached(priority: .userInitiated) { () -> [(Int, Response, [HarmonicPoint])] in
+            let sweep = LogSweep(seconds: seconds, sampleRate: rate)
+            return sums.keys.sorted().map { c in
+                let y = vDSP.divide(sums[c]!, n)
+                let ir = sweep.impulse(fromRecorded: y)
+                var r = Response(impulse: ir)
+                r.latencySamples = -(offsets[c] ?? 0)
+                return (c, r, sweep.distortion(fromRecorded: y))
+            }
+        }.value
+        for (c, r, d) in results {
+            let calibrated = micCalibration(for: c).map(r.removing(mic:)) ?? r
+            let k = state.snapshots.count
+            var s = Snapshot(name: "Sweep Ch \(channel + 1)" + (results.count > 1 ? " · Mic \(c + 1)" : ""), colorHex: Self.palette[k % Self.palette.count], response: calibrated)
+            s.distortion = d
+            state.snapshots.append(s)
+        }
+    }
+
+    /// Writes the impulse response of `s` as a 32-bit float WAV file.
+    func exportImpulse(_ s: Snapshot) {
+        guard let ir = s.response.impulse else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(s.name) IR.wav"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? WAVFile.encode([ir.samples], sampleRate: ir.sampleRate).write(to: url)
+    }
+
+    /// Reads impulse responses from WAV files, one snapshot for each file. The largest peak becomes lag 0.
+    func importImpulses() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.wav]
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            guard let data = try? Data(contentsOf: url), let wav = WAVFile.decode(data), let x = wav.channels.first, !x.isEmpty else {
+                engineError = "\(url.lastPathComponent) is not a WAV file this app can read."
+                continue
+            }
+            let peak = x.indices.max { abs(x[$0]) < abs(x[$1]) } ?? 0
+            let k = state.snapshots.count
+            let ir = ImpulseResponse(samples: x, sampleRate: wav.sampleRate, zeroIndex: peak)
+            state.snapshots.append(Snapshot(name: url.deletingPathExtension().lastPathComponent, colorHex: Self.palette[k % Self.palette.count], response: Response(impulse: ir)))
+        }
     }
 
     // MARK: Capture timer

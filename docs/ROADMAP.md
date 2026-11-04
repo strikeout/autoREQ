@@ -110,6 +110,9 @@ Effort: large. Risk: medium. Phase 2 also makes the calibration better.
 
 ## Phase 3 — v1.4.0: The impulse response mode
 
+Status: done in v1.4.0. The sweep impulse response stays in the state file. It is 2 s long, so it
+is about 0.5 MB in each snapshot.
+
 1. **Log sweep.** Add a logarithmic sine sweep from 20 Hz to 20 kHz with a length of 1 s to 10 s.
    Calculate the impulse response with the inverse filter of the sweep. The impulse response then
    has the length of the sweep.

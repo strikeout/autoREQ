@@ -83,6 +83,8 @@ final class MeasurementEngine: @unchecked Sendable {
         let noiseMask = Atomic<UInt64>(0)
         let noiseGain = Atomic<UInt32>(Float(0.1).bitPattern)
         let micPeak = Atomic<UInt32>(0)
+        /// The reference index of the last table start (a sweep start), or -1.
+        let periodStart = Atomic<Int>(-1)
         /// The render thread only tries the lock. If the main thread holds it to swap the signal,
         /// the render thread plays silence for one buffer.
         let generator: Mutex<SignalGenerator>
@@ -127,9 +129,10 @@ final class MeasurementEngine: @unchecked Sendable {
             let m = sh.noiseMask.load(ordering: .relaxed)
             let g = Float(bitPattern: sh.noiseGain.load(ordering: .relaxed))
             let n = min(frames, 8192)
-            if m == 0 || sh.generator.withLockIfAvailable({ $0.render(scratch, n) }) == nil {
-                for i in 0..<n { scratch[i] = 0 }
-            }
+            let before = ref.count
+            let wrap = m == 0 ? nil : sh.generator.withLockIfAvailable { g -> Int? in g.render(scratch, n); return g.lastWrap }
+            if wrap == nil { for i in 0..<n { scratch[i] = 0 } }
+            if let w = wrap ?? nil { sh.periodStart.store(before + w, ordering: .relaxed) }
             for i in 0..<n { scratch[i] *= g }
             ref.write(scratch, n)
             for (c, buf) in chans.enumerated() {
@@ -247,6 +250,28 @@ final class MeasurementEngine: @unchecked Sendable {
 
     /// Clears the averages. The delays stay, because they do not change while the engines run.
     func resetAverages() { queue.async { for m in self.mics { m.reset(periodic: self.periodicSignal) }; self.history = []; self.stableFrames = 0 } }
+
+    /// The reference index of the last table start, or -1. The sweep measurement reads it.
+    var periodStart: Int { shared.periodStart.load(ordering: .relaxed) }
+
+    /// The mic samples of the last complete period of the table (for example one sweep and its tail).
+    /// Each array starts at the first sample of the sweep, with the delay of its mic removed.
+    /// `start` identifies the period. It returns nil before the delays are known.
+    func lastPeriod(length: Int) -> (start: Int, offsets: [Int: Int], data: [Int: [Float]])? {
+        queue.sync {
+            let s = shared.periodStart.load(ordering: .relaxed)
+            guard s >= 0, let main = mics.first, let off = main.offset else { return nil }
+            // Use the newest period that the main mic has fully recorded.
+            let start = main.ring.count >= s - off + length ? s : s - length
+            var data: [Int: [Float]] = [:], offsets: [Int: Int] = [:]
+            for m in mics {
+                guard let o = m.offset, let y = m.ring.read(from: start - o, count: length) else { continue }
+                data[m.channel] = y
+                offsets[m.channel] = o
+            }
+            return data.isEmpty ? nil : (start, offsets, data)
+        }
+    }
 
     private func restart() {
         for m in mics {

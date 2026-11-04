@@ -9,7 +9,7 @@ struct GeneratorControls: View {
     @State private var presetName = ""
 
     /// The peak-to-RMS ratio of each signal in dB. A file uses a typical value for music.
-    private static let crest: [SignalKind: Double] = [.pink: 13, .periodicPink: 14, .white: 5, .sine: 3, .dualSine: 6, .file: 15]
+    private static let crest: [SignalKind: Double] = [.pink: 13, .periodicPink: 14, .white: 5, .sine: 3, .dualSine: 6, .logSweep: 9, .file: 15]
 
     private func bind<T>(_ path: WritableKeyPath<GeneratorPreset, T>) -> Binding<T> {
         Binding(get: { model.state.generator[keyPath: path] }, set: { model.state.generator[keyPath: path] = $0; model.generatorChanged() })
@@ -28,6 +28,11 @@ struct GeneratorControls: View {
             case .dualSine:
                 frequency(bind(\.signal.frequency))
                 frequency(bind(\.signal.frequency2))
+            case .logSweep:
+                Picker("Length", selection: Binding(get: { g.signal.sweepSeconds ?? 2 }, set: { model.state.generator.signal.sweepSeconds = $0; model.generatorChanged() })) {
+                    ForEach([1.0, 2, 5, 10], id: \.self) { Text("\(Int($0)) s").tag($0) }
+                }
+                .frame(width: 130)
             case .file:
                 Button("Choose File…") { model.chooseGeneratorFile() }
                 Text(g.signal.filePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No file")

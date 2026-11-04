@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.4.0
+
+- The Room Analysis screen measures with a log sweep. A sweep gives a 2 s impulse response and the harmonic distortion.
+- The generator has a Log Sweep signal for the Measure screen.
+- The screen shows EDT, T20 and T30 in octave bands or 1/3-octave bands, with the Lundeby noise correction.
+- The screen shows C50, C80, D50, Ts and the direct-to-reverberant ratio.
+- The screen shows the THD, H2 and H3 of a sweep.
+- The energy-time curves of other snapshots can show in the same chart.
+- Impulse responses export to and import from WAV files.
+
 ## v1.3.0
 
 - The transfer function uses frequency-dependent windows (FTW). A narrow bass resonance now reads within 1 dB of its true level.

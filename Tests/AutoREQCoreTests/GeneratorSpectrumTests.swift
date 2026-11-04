@@ -14,7 +14,9 @@ private func db(_ x: Float) -> Double { 20 * log10(Double(x)) }
 
 @Test func eachSignalHasAnRMSOfOne() {
     for kind in SignalKind.allCases where kind != .file {
-        let x = render(SignalSettings(kind: kind, frequency: 1000, frequency2: 60), count: 1 << 19)
+        // A sweep repeats with silence, so the test renders whole periods of it.
+        let n = kind == .logSweep ? 3 * SignalGenerator.sweepTable(seconds: 2, sampleRate: 48_000).count : 1 << 19
+        let x = render(SignalSettings(kind: kind, frequency: 1000, frequency2: 60), count: n)
         #expect(abs(db(vDSP.rootMeanSquare(x))) < 0.3, "\(kind.rawValue)")
     }
 }

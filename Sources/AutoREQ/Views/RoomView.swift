@@ -8,6 +8,12 @@ struct RoomView: View {
     @State private var sourceID = "live"
     @State private var span: Span = .ms100
     @State private var result: Result?
+    @State private var compareIDs: Set<UUID> = []
+    @State private var banding: Banding = .oct1
+    @State private var sweepChannel = 0
+    @State private var sweepSeconds = 2.0
+    @State private var sweepRepeats = 2
+    @State private var sweepPeak = -12.0
 
     enum Span: Double, CaseIterable, Identifiable {
         case ms20 = 20, ms50 = 50, ms100 = 100, ms300 = 300, all = 1000
@@ -19,19 +25,33 @@ struct RoomView: View {
         var etc: [Double]
         var reflections: [Reflection]
         var modes: [RoomMode]
+        var decays: [BandDecay] = []
+        var bandRatios: [RoomAcoustics.EnergyRatios] = []
+        var ratios: RoomAcoustics.EnergyRatios?
+        /// The energy-time curves of the compared snapshots, in their own time base.
+        var overlays: [(name: String, color: Color, ir: ImpulseResponse, etc: [Double])] = []
     }
+
+    private struct Key: Hashable {
+        var source: Response?
+        var compare: Set<UUID>
+        var banding: Banding
+    }
+
+    private var snapshot: Snapshot? { model.state.snapshots.first { $0.id.uuidString == sourceID } }
 
     private var source: Response? {
         if sourceID == "live" { return model.live }
-        return model.state.snapshots.first { $0.id.uuidString == sourceID }?.response
+        return snapshot?.response
     }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Room Analysis").font(.title2.bold())
-                Text("Measure a speaker on the Measure page, then take a snapshot. A measurement needs about 5 s of pink noise for a clean impulse response.")
+                Text("Measure with a log sweep below, or take a snapshot on the Measure page. A sweep gives a 2 s impulse response with distortion.")
                     .foregroundStyle(.secondary)
+                sweepPanel
                 HStack {
                     Picker("Measurement", selection: $sourceID) {
                         Text("Live").tag("live")
@@ -47,6 +67,18 @@ struct RoomView: View {
                     .pickerStyle(.segmented)
                     .frame(maxWidth: 360)
                 }
+                HStack {
+                    Menu("Compare (\(compareIDs.count))") {
+                        ForEach(model.state.snapshots.filter { $0.response.impulse != nil && $0.id.uuidString != sourceID }) { s in
+                            Toggle(s.name, isOn: Binding(get: { compareIDs.contains(s.id) }, set: { if $0 { compareIDs.insert(s.id) } else { compareIDs.remove(s.id) } }))
+                        }
+                    }
+                    .fixedSize()
+                    .help("Shows the energy-time curves of other snapshots in the same chart.")
+                    Spacer()
+                    if let s = snapshot, s.response.impulse != nil { Button("Export IR as WAV…") { model.exportImpulse(s) } }
+                    Button("Import IR from WAV…") { model.importImpulses() }
+                }
                 if let r = source {
                     if let ir = r.impulse, let res = result {
                         timeDomain(ir, res)
@@ -59,19 +91,30 @@ struct RoomView: View {
                             if r.impulse != nil { reflectionTable(res.reflections) }
                             modeTable(res.modes)
                         }
+                        if r.impulse != nil { decayTable(res) }
                     }
+                    if let d = snapshot?.distortion, !d.isEmpty { distortionChart(d) }
                 } else {
                     Text("Start the noise on the Measure page, or select a snapshot.").foregroundStyle(.secondary)
                 }
             }
             .padding(24)
         }
-        .task(id: source) {
+        .task(id: Key(source: source, compare: compareIDs, banding: banding)) {
             guard let r = source else { result = nil; return }
+            let others = model.state.snapshots.filter { compareIDs.contains($0.id) }.compactMap { s in s.response.impulse.map { (s.name, s.color, $0) } }
+            let b = banding
             result = await Task.detached(priority: .userInitiated) {
                 let etc = r.impulse.map(RoomAnalysis.etc) ?? []
-                return Result(etc: etc, reflections: r.impulse.map { RoomAnalysis.reflections($0, etc: etc) } ?? [],
-                              modes: RoomAnalysis.modes(response: r, impulse: r.impulse))
+                var res = Result(etc: etc, reflections: r.impulse.map { RoomAnalysis.reflections($0, etc: etc) } ?? [],
+                                 modes: RoomAnalysis.modes(response: r, impulse: r.impulse))
+                if let ir = r.impulse {
+                    res.decays = RoomAcoustics.bandDecays(ir, banding: b)
+                    res.bandRatios = res.decays.map { RoomAcoustics.energyRatios(ir, band: Band(centre: $0.centre, lower: $0.lower, upper: $0.upper)) }
+                    res.ratios = RoomAcoustics.energyRatios(ir)
+                }
+                res.overlays = others.map { (name: $0.0, color: $0.1, ir: $0.2, etc: RoomAnalysis.etc($0.2)) }
+                return res
             }.value
         }
     }
@@ -121,6 +164,13 @@ struct RoomView: View {
                         .foregroundStyle(.yellow.opacity(0.35))
                     LineMark(x: .value("ms", p.t), y: .value("dB", p.v)).foregroundStyle(.yellow).lineStyle(StrokeStyle(lineWidth: 1))
                 }
+                ForEach(Array(res.overlays.enumerated()), id: \.offset) { k, o in
+                    let pts = overlayPoints(o.ir, o.etc, xDomain)
+                    ForEach(Array(pts.enumerated()), id: \.offset) { _, p in
+                        LineMark(x: .value("ms", p.t), y: .value("dB", p.v), series: .value("Snapshot", "o\(k)"))
+                            .foregroundStyle(o.color).lineStyle(StrokeStyle(lineWidth: 1))
+                    }
+                }
                 ForEach(Array(res.reflections.enumerated()), id: \.element.id) { n, r in
                     if xDomain.contains(ir.timeMs(r.index)) {
                         PointMark(x: .value("ms", ir.timeMs(r.index)), y: .value("dB", r.levelDB))
@@ -136,6 +186,118 @@ struct RoomView: View {
             .chartYAxisLabel("dB")
             .frame(height: 200)
             .padding(6)
+        }
+    }
+
+    /// The bucket maximum of an overlay ETC in the time range of the main chart.
+    private func overlayPoints(_ ir: ImpulseResponse, _ etc: [Double], _ domain: ClosedRange<Double>) -> [(t: Double, v: Double)] {
+        let lo = max(0, ir.zeroIndex + Int(domain.lowerBound / 1000 * ir.sampleRate))
+        let hi = min(etc.count, ir.zeroIndex + Int(domain.upperBound / 1000 * ir.sampleRate))
+        guard hi > lo else { return [] }
+        let step = max(1, (hi - lo) / 600)
+        return stride(from: lo, to: hi, by: step).map { i in (ir.timeMs(i), max(etc[i..<min(i + step, hi)].max() ?? -90, -90)) }
+    }
+
+    // MARK: - Sweep, decay and distortion
+
+    private var sweepPanel: some View {
+        GroupBox("Measure with a log sweep") {
+            HStack(spacing: 12) {
+                Picker("Output", selection: $sweepChannel) {
+                    ForEach(0..<(model.outputDevice?.outputChannels ?? 2), id: \.self) { c in
+                        let names = model.state.speakers.filter { $0.outputChannel == c }.map(\.name)
+                        Text("Ch \(c + 1)" + (names.isEmpty ? "" : " — " + names.joined(separator: ", "))).tag(c)
+                    }
+                }
+                .frame(width: 200)
+                Picker("Length", selection: $sweepSeconds) { ForEach([1.0, 2, 5, 10], id: \.self) { Text("\(Int($0)) s").tag($0) } }.frame(width: 120)
+                Stepper("\(sweepRepeats)×", value: $sweepRepeats, in: 1...8).fixedSize()
+                Stepper("Peak \(Int(sweepPeak)) dBFS", value: $sweepPeak, in: -40...(-3), step: 1).fixedSize()
+                if let p = model.sweepProgress {
+                    ProgressView().controlSize(.small)
+                    Text(p).foregroundStyle(.secondary)
+                    Button("Stop") { model.setNoise([]) }
+                } else {
+                    Button { Task { await model.measureSweep(channel: sweepChannel, seconds: sweepSeconds, repeats: sweepRepeats, peakDBFS: sweepPeak) } } label: {
+                        Label("Measure", systemImage: "waveform")
+                    }
+                }
+                Spacer()
+            }
+            .padding(6)
+            Text("A sweep is louder than pink noise at the same peak level. Set the amplifier low before you start. Each sweep has 2 s of silence for the decay.")
+                .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
+        }
+    }
+
+    private func decayTable(_ res: Result) -> some View {
+        GroupBox {
+            Grid(alignment: .trailing, horizontalSpacing: 20, verticalSpacing: 4) {
+                GridRow { Text("Band"); Text("EDT"); Text("T20"); Text("T30"); Text("C50"); Text("C80"); Text("D50"); Text("Range") }
+                    .font(.caption.bold()).foregroundStyle(.secondary)
+                ForEach(Array(res.decays.enumerated()), id: \.offset) { i, d in
+                    let e = res.bandRatios.indices.contains(i) ? res.bandRatios[i] : nil
+                    GridRow {
+                        Text(Band(centre: d.centre, lower: d.lower, upper: d.upper).label + " Hz")
+                        Text(seconds(d.edt)); Text(seconds(d.t20)); Text(seconds(d.t30))
+                        Text(e.map { String(format: "%+.1f dB", $0.c50DB) } ?? "–")
+                        Text(e.map { String(format: "%+.1f dB", $0.c80DB) } ?? "–")
+                        Text(e.map { String(format: "%.0f %%", $0.d50Percent) } ?? "–")
+                        Text(String(format: "%.0f dB", d.dynamicRangeDB)).foregroundStyle(.secondary)
+                    }
+                    .monospacedDigit()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+            if let r = res.ratios {
+                Text(String(format: "Broadband: C50 %+.1f dB · C80 %+.1f dB · D50 %.0f %% · Ts %.0f ms · D/R %+.1f dB", r.c50DB, r.c80DB, r.d50Percent, r.tsMs, r.drrDB))
+                    .monospacedDigit().frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
+            }
+            Text("EDT, T20 and T30 are decay times to −60 dB. A time shows only when the band has enough range above the noise: 10, 25 and 35 dB. C50 and D50 relate to speech, and C80 relates to music.")
+                .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
+        } label: {
+            HStack {
+                Text("Decay and clarity")
+                Picker("", selection: $banding) {
+                    Text("Octaves").tag(Banding.oct1)
+                    Text("1/3 octaves").tag(Banding.oct3)
+                }
+                .pickerStyle(.segmented).frame(width: 220)
+            }
+        }
+    }
+
+    private func seconds(_ v: Double?) -> String { v.map { String(format: "%.2f s", $0) } ?? "–" }
+
+    private func distortionChart(_ d: [HarmonicPoint]) -> some View {
+        GroupBox("Distortion of the sweep") {
+            Chart {
+                ForEach(Array(d.enumerated()), id: \.offset) { _, p in
+                    if p.thdPercent > 0 {
+                        LineMark(x: .value("Hz", p.frequency), y: .value("dB", 20 * log10(p.thdPercent / 100)), series: .value("Curve", "THD"))
+                            .foregroundStyle(by: .value("Curve", "THD"))
+                    }
+                    if p.h2DB > -150 {
+                        LineMark(x: .value("Hz", p.frequency), y: .value("dB", p.h2DB), series: .value("Curve", "H2"))
+                            .foregroundStyle(by: .value("Curve", "H2"))
+                    }
+                    if p.h3DB > -150 {
+                        LineMark(x: .value("Hz", p.frequency), y: .value("dB", p.h3DB), series: .value("Curve", "H3"))
+                            .foregroundStyle(by: .value("Curve", "H3"))
+                    }
+                }
+            }
+            .chartForegroundStyleScale(["THD": Color.yellow, "H2": Color.cyan, "H3": Color.pink])
+            .chartXScale(domain: 20...20_000, type: .log)
+            .chartYScale(domain: -100...0)
+            .chartXAxis { ResponseChart.frequencyAxis }
+            .chartYAxisLabel("dB re fundamental")
+            .chartPlotStyle { $0.clipped() }
+            .frame(height: 200)
+            .padding(6)
+            Text("−40 dB is 1 % distortion. −20 dB is 10 %. Room noise sets a floor, so a low reading can be noise and not the speaker.")
+                .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 6)
         }
     }
 

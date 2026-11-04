@@ -1,4 +1,5 @@
 import AutoREQCore
+import Accelerate
 import AVFoundation
 import Foundation
 
@@ -74,6 +75,22 @@ enum SelfTest {
         say(String(format: "rta sine: 1 kHz band %.2f dB, status %@", sineLevel, last?.status.label ?? "-"))
         let sineOK = abs(sineLevel + 20) < 0.5 && last?.status == .tone
 
+        // A log sweep through the loop gives one peak at lag 0 and almost no distortion.
+        engine.setOutput(channels: [0], signal: SignalSettings(kind: .logSweep, sweepSeconds: 1), levelDBFS: -12)
+        let table = SignalGenerator.sweepTable(seconds: 1, sampleRate: rate)
+        try? await Task.sleep(for: .seconds(3 * Double(table.count) / rate + 1))
+        var sweepOK = false
+        if let p = engine.lastPeriod(length: table.count), let raw = p.data[0] {
+            // The generator scales the table to an RMS of 1.0, so the sweep peak is the level over the table RMS.
+            let y = vDSP.divide(raw, Float(pow(10, -12.0 / 20)) / vDSP.rootMeanSquare(table))
+            let sweep = LogSweep(seconds: 1, sampleRate: rate)
+            let ir = sweep.impulse(fromRecorded: y)
+            let thd = sweep.distortion(fromRecorded: y).filter { $0.frequency >= 50 && $0.frequency <= 5000 }.map(\.thdPercent).max() ?? 100
+            let pk = ir.samples.indices.max { abs(ir.samples[$0]) < abs(ir.samples[$1]) } ?? 0
+            say(String(format: "sweep: impulse peak %.3f at %.2f ms, largest THD %.4f %% (50 Hz–5 kHz)", ir.samples[pk], ir.timeMs(pk), thd))
+            sweepOK = abs(ir.timeMs(pk)) < 0.1 && ir.samples[pk] > 0.7 && thd < 0.01
+        } else { say("sweep: no period recorded") }
+
         // Periodic pink noise gives the impulse response with no window error.
         engine.setOutput(channels: [0], signal: SignalSettings(kind: .periodicPink), levelDBFS: -20)
         try? await Task.sleep(for: .seconds(6))
@@ -85,7 +102,7 @@ enum SelfTest {
             periodicOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty && ir.samples[peak] > 0.8
         } else { say("periodic pink: no impulse response") }
 
-        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK && secondOK
+        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK && secondOK && sweepOK
         say(ok ? "PASS" : "FAIL")
         return ok ? 0 : 1
     }
