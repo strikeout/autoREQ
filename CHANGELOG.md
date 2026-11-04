@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.3.0
+
+- The transfer function uses frequency-dependent windows (FTW). A narrow bass resonance now reads within 1 dB of its true level.
+- Up to 8 mics of one interface measure at the same time. Each mic has its own delay and calibration file.
+- In the guided calibration, each extra mic counts as one position.
+- Track Delay follows the delay of each mic from its impulse response. It replaces the old delay search every 3 s.
+- A snapshot can be the reference. The chart then shows the other traces relative to it.
+- The phase delay moves the time reference of the live phase. Find sets it to the impulse peak.
+- The capture timer takes snapshots at a set interval and can add their average.
+
 ## v1.2.0
 
 - The generator plays pink noise, white noise, periodic pink noise, a sine tone, a dual sine or an audio file.

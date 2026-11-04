@@ -37,6 +37,10 @@ final class CalibrationSession {
 
     var speakers: [Speaker] { app.state.speakers.filter { $0.outputChannel != nil } }
     var positions: Int { mode == .quick ? app.state.options.quickPositions : app.state.options.fullPositions }
+    /// The number of mics that measure at the same time.
+    var micCount: Int { 1 + app.state.extraMicChannels.filter { $0 != app.state.micChannel }.count }
+    /// The number of mic moves. Each round measures one position for each mic.
+    var rounds: Int { max(1, Int((Double(positions) / Double(micCount)).rounded(.up))) }
 
     // MARK: Levels
 
@@ -85,7 +89,8 @@ final class CalibrationSession {
 
     private func runPosition() {
         runTask = Task {
-            var set: [UUID: Response] = [:]
+            // One set of measurements for each mic channel.
+            var sets: [Int: [UUID: Response]] = [:]
             app.setAveraging(.fifo16)
             for s in speakers {
                 guard let ch = s.outputChannel else { continue }
@@ -101,13 +106,15 @@ final class CalibrationSession {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
                 if Task.isCancelled { return }
-                if let r = app.live, app.status == .measuring { set[s.id] = r } else { measureMessage = "\(s.name) gave no usable signal. It will be skipped." }
+                if app.live != nil, app.status == .measuring {
+                    for (ch, r) in app.liveByChannel { sets[ch, default: [:]][s.id] = r }
+                } else { measureMessage = "\(s.name) gave no usable signal. It will be skipped." }
                 app.setNoise([])
                 try? await Task.sleep(for: .milliseconds(400))
             }
             currentSpeaker = nil
-            measurements.append(set)
-            if position + 1 < positions {
+            for ch in sets.keys.sorted() where measurements.count < positions { measurements.append(sets[ch]!) }
+            if position + 1 < rounds {
                 waitingForMove = true
                 measureMessage = "Move the mic 5–10 cm, then continue."
             } else {

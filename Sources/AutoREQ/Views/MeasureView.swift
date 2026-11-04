@@ -6,7 +6,11 @@ struct MeasureView: View {
     @Binding var section: AppSection?
     let session: CalibrationSession
     @State private var showSettings = false
+    @State private var showTimer = false
     @State private var editing: Snapshot?
+
+    /// The colors of the live traces of the extra mics. The main mic is white.
+    static let liveColors: [Color] = [.white, .gray, .mint, .teal, .indigo, .brown, .cyan, .pink]
 
     var body: some View {
         @Bindable var model = model
@@ -24,9 +28,19 @@ struct MeasureView: View {
 
     private var traces: [Trace] {
         var t: [Trace] = []
-        if let live = model.live, model.engine != nil { t.append(Trace(id: "Realtime", color: .white, response: live, lineWidth: 2)) }
-        for s in model.state.snapshots where s.visible {
-            t.append(Trace(id: s.id.uuidString, color: s.color, response: s.displayed, lineWidth: model.selectedSnapshotIDs.contains(s.id) ? 2.5 : 1.5))
+        let ref = model.referenceSnapshot?.displayed
+        func relative(_ r: Response) -> Response { ref.map(r.dividing(by:)) ?? r }
+        if model.engine != nil {
+            let chans = [model.state.micChannel] + model.state.extraMicChannels
+            for (k, c) in chans.enumerated() {
+                guard let r = model.liveByChannel[c] ?? (k == 0 ? model.live : nil) else { continue }
+                let shown = r.offset(delayMs: model.state.liveDelayMs, gainDB: 0, inverted: false)
+                t.append(Trace(id: chans.count > 1 ? "Realtime Ch \(c + 1)" : "Realtime", color: Self.liveColors[k % Self.liveColors.count],
+                               response: relative(shown), lineWidth: 2))
+            }
+        }
+        for s in model.state.snapshots where s.visible && s.id != model.referenceSnapshot?.id {
+            t.append(Trace(id: s.id.uuidString, color: s.color, response: relative(s.displayed), lineWidth: model.selectedSnapshotIDs.contains(s.id) ? 2.5 : 1.5))
         }
         return t
     }
@@ -37,6 +51,15 @@ struct MeasureView: View {
                 .disabled(model.autoCapturing || model.state.generator.signal.kind.isTonal)
             Button { model.takeSnapshot() } label: { Label("Take Snapshot", systemImage: "camera") }
                 .disabled(model.live == nil || model.noiseChannels.isEmpty)
+            Button { showTimer.toggle() } label: {
+                if let p = model.timerProgress { Label("Timer \(p.done)/\(p.total)", systemImage: "timer").foregroundStyle(.yellow) }
+                else { Label("Timer", systemImage: "timer") }
+            }
+            .popover(isPresented: $showTimer) { TimerSettings().padding().frame(width: 300) }
+            delayControl
+            if let ref = model.referenceSnapshot {
+                Label("Relative to \(ref.name)", systemImage: "star.fill").font(.caption).foregroundStyle(.yellow)
+            }
             Spacer()
             statusPill
             Button { showSettings.toggle() } label: { Image(systemName: "gearshape") }
@@ -44,6 +67,23 @@ struct MeasureView: View {
         }
         .padding(.horizontal)
     }
+
+    /// The plot time reference: an extra delay for the phase of the live traces.
+    private var delayControl: some View {
+        HStack(spacing: 2) {
+            Text("Phase delay").foregroundStyle(.secondary)
+            Button("−") { model.state.liveDelayMs -= delayStep }.buttonStyle(.borderless)
+            Text(String(format: "%.3f ms", model.state.liveDelayMs)).monospacedDigit().frame(width: 72)
+            Button("+") { model.state.liveDelayMs += delayStep }.buttonStyle(.borderless)
+            Button("Find") { if let t = model.live?.impulse?.peakTimeMs { model.state.liveDelayMs = t } }
+                .buttonStyle(.borderless).disabled(model.live?.impulse == nil)
+                .help("Sets the phase delay to the peak of the impulse response, so the phase of the direct sound is flat.")
+            Button("↩") { model.state.liveDelayMs = 0 }.buttonStyle(.borderless)
+        }
+        .font(.caption)
+    }
+
+    private var delayStep: Double { NSEvent.modifierFlags.contains(.shift) ? 0.001 : 0.02 }
 
     private var statusPill: some View {
         let (text, color): (String, Color) = {
@@ -129,6 +169,12 @@ struct SnapshotRow: View {
                 ForEach(model.state.speakers) { sp in Text(sp.name).tag(UUID?.some(sp.id)) }
             }.frame(width: 130)
             Button("Edit", action: onEdit)
+            let isRef = model.state.referenceSnapshotIDStored == snapshot.id
+            Button { model.state.referenceSnapshotIDStored = isRef ? nil : snapshot.id } label: {
+                Image(systemName: isRef ? "star.fill" : "star").foregroundStyle(isRef ? .yellow : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help(isRef ? "Remove the reference" : "Set as reference: show the other traces relative to this snapshot")
             Button { model.state.snapshots.removeAll { $0.id == snapshot.id }; model.selectedSnapshotIDs.remove(snapshot.id) } label: {
                 Image(systemName: "xmark").foregroundStyle(.red)
             }.buttonStyle(.plain)
@@ -212,8 +258,12 @@ struct MeasurementSettings: View {
                 TextField("From Hz", value: $model.state.graphScale.fromHz, format: .number)
                 TextField("To Hz", value: $model.state.graphScale.toHz, format: .number)
             }
-            Toggle("Clock Drift Correction", isOn: Binding(get: { model.state.clockDrift }, set: { model.state.clockDrift = $0; model.engine?.clockDriftCorrection = $0 }))
-            Text("Turn this on only when the mic and the speakers use different interfaces.").font(.caption).foregroundStyle(.secondary)
+            Toggle("Frequency-dependent windows (FTW)", isOn: Binding(get: { model.state.multiWindow }, set: { model.state.multiWindow = $0; model.engine?.setMultiWindow($0) }))
+            Text("Long windows in the bass and short windows in the treble. The bass shows more detail, and late reflections affect the treble less.")
+                .font(.caption).foregroundStyle(.secondary)
+            Toggle("Track Delay (Clock Drift Correction)", isOn: Binding(get: { model.state.clockDrift }, set: { model.state.clockDrift = $0; model.engine?.clockDriftCorrection = $0 }))
+            Text("The app follows the delay of each mic from its impulse response. Turn it on when you move the mic, or when the mic and the speakers use different interfaces.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -239,5 +289,30 @@ extension Color {
     var hex: String {
         let c = NSColor(self).usingColorSpace(.sRGB) ?? .yellow
         return String(format: "#%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
+    }
+}
+
+/// The interval, the count and the average of the capture timer.
+struct TimerSettings: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Form {
+            Stepper("Every \(Int(model.state.timer.intervalSeconds)) s", value: $model.state.timer.intervalSeconds, in: 2...600, step: 1)
+            Stepper("\(model.state.timer.count) captures", value: $model.state.timer.count, in: 1...100)
+            Toggle("Add the average as a snapshot", isOn: $model.state.timer.average)
+            Toggle("Keep each capture", isOn: $model.state.timer.keepEach).disabled(!model.state.timer.average)
+            Text("Start the generator first. The timer takes a snapshot of each mic at each interval.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                if model.timerProgress == nil {
+                    Button("Start Timer") { model.startTimer() }.disabled(model.noiseChannels.isEmpty || model.live == nil)
+                } else {
+                    Button("Stop Timer") { model.stopTimer() }
+                }
+            }
+        }
     }
 }

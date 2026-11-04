@@ -120,3 +120,14 @@ final class InputStream {
 
     func stop() { engine.stop() }
 }
+
+extension AudioDevice {
+    /// True for an aggregate device from Audio MIDI Setup. Its sub-devices can have separate clocks.
+    var isAggregate: Bool {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var type: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &type) == noErr else { return false }
+        return type == kAudioDeviceTransportTypeAggregate
+    }
+}

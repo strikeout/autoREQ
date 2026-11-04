@@ -132,6 +132,24 @@ struct SettingsView: View {
                     HStack { Text("Mic Level"); MicMeter(peak: model.micPeakDB, rms: model.micRMSDB).frame(height: 8) }
                     MicCalibrationRow()
                 }
+                Section("Extra Mics") {
+                    let n = min(model.micDevice?.inputChannels ?? 1, MeasurementEngine.maxSpectrumChannels)
+                    ForEach(0..<n, id: \.self) { c in
+                        if c != model.state.micChannel {
+                            Toggle("Ch \(c + 1)", isOn: Binding(get: { model.state.extraMicChannels.contains(c) }, set: { on in
+                                model.state.extraMicChannels = (model.state.extraMicChannels.filter { $0 != c } + (on ? [c] : [])).sorted()
+                                Task { await model.restartEngine() }
+                            }))
+                            if model.state.extraMicChannels.contains(c) { MicCalibrationRow(channel: c).padding(.leading, 20) }
+                        }
+                    }
+                    Text("Each extra mic measures at the same time as the main mic. In the guided calibration, each mic counts as one position.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    if model.micDevice?.isAggregate == true {
+                        Text("This is an aggregate device. Its devices can have separate clocks. Turn on drift correction in Audio MIDI Setup, or use one interface for all mics.")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                }
                 Section("Speaker Output") {
                     Picker("Device", selection: $model.state.outputDeviceUID) {
                         ForEach(model.devices.filter { $0.outputChannels > 0 }) { Text("\($0.name) (\($0.outputChannels) ch)").tag(String?.some($0.uid)) }
@@ -272,11 +290,13 @@ struct LoopbackVolume: View {
 /// Chooses the calibration of the current mic, and imports calibration files.
 struct MicCalibrationRow: View {
     @Environment(AppModel.self) private var model
+    /// The row sets the calibration of this mic channel. Nil selects the main mic.
+    var channel: Int?
 
     var body: some View {
-        let active = model.activeMicCalibration
+        let active = model.micCalibration(for: channel ?? model.state.micChannel)
         VStack(alignment: .leading, spacing: 6) {
-            Picker("Calibration", selection: Binding(get: { active?.name }, set: { model.selectMicCalibration($0) })) {
+            Picker("Calibration", selection: Binding(get: { active?.name }, set: { model.selectMicCalibration($0, channel: channel) })) {
                 Text("None").tag(String?.none)
                 let typical = model.allMicCalibrations.filter(\.isTypical)
                 let files = model.allMicCalibrations.filter { !$0.isTypical }
@@ -289,7 +309,7 @@ struct MicCalibrationRow: View {
             }
             .disabled(model.state.micDeviceUID == nil)
             HStack {
-                Button("Import calibration file…") { model.importMicCalibration() }
+                Button("Import calibration file…") { model.importMicCalibration(channel: channel) }
                 if let a = active, !a.isTypical {
                     Button("Remove", role: .destructive) { model.removeMicCalibration(a.name) }
                 }

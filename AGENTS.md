@@ -139,6 +139,16 @@ cat version.txt
   and reports the status `.tone`.
 - The engine writes the first 8 input channels to `inputRings` for the RTA. `SpectrumAnalyzer`
   uses the IEC 61260-1 base-ten bands and weights each FFT bin by its overlap with the band.
+- `WindowedTransferAnalyzer` (FTW) runs one `TransferAnalyzer` for each window. At 48 kHz, the
+  windows are 64k below 160 Hz, 16k to 1.25 kHz, 4k to 5 kHz and 1k above. A 1/3-octave crossfade
+  joins the parts. A
+  short window adds up to 4 frames for each tick, so its average covers the same time.
+- The engine keeps one `Mic` for each mic channel, with its own delay offset, analysers and
+  `DelayTracker`. The first mic is the main mic. Extra mics read `inputRings`, so they must be
+  among the first 8 input channels.
+- Delay tracking (the setting `clockDrift`) replaces the old search every 3 s. It reads the
+  GCC-PHAT peak of the newest impulse frame. A shift must show in two frames in a row.
+- The mic calibration of the main mic has the device UID as its key. An extra mic uses `uid#channel`.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

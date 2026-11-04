@@ -16,12 +16,15 @@ enum SelfTest {
         }
         let rate = AudioDevice.sampleRate(of: dev.id) ?? 48_000
         let engine: MeasurementEngine
-        do { engine = try MeasurementEngine(outputDevice: dev.id, inputDevice: dev.id, micChannel: 0, sampleRate: rate, averaging: .fifo16) }
+        do { engine = try MeasurementEngine(outputDevice: dev.id, inputDevice: dev.id, micChannels: dev.inputChannels > 1 ? [0, 1] : [0], sampleRate: rate, averaging: .fifo16) }
         catch { say("FAIL engine: \(error.localizedDescription)"); return 1 }
         var last: MeasurementEngine.Update?
         engine.onUpdate = { last = $0 }
         engine.setSpectrum(channels: [0], banding: .oct3, averaging: .fifo32)
-        engine.setNoise(channels: [0], levelDBFS: -20)
+        engine.clockDriftCorrection = true
+        // With two channels, the noise plays on both outputs, and the second input is a second mic.
+        let two = engine.micChannels.count > 1 && engine.outputChannelCount > 1
+        engine.setNoise(channels: two ? [0, 1] : [0], levelDBFS: -20)
         try? await Task.sleep(for: .seconds(6))
         guard let u = last, let r = u.response else { engine.shutdown(); say("FAIL no response; status \(String(describing: last?.status))"); return 1 }
         let band = (FrequencyGrid.index(of: 50))...(FrequencyGrid.index(of: 15_000))
@@ -30,6 +33,15 @@ enum SelfTest {
         let coh = r.coherence[band].reduce(0, +) / Double(band.count)
         say(String(format: "rate %.0f  latency %d samples  mean %.2f dB  spread %.2f dB  coherence %.3f  mic rms %.1f dBFS  stability %.2f",
                    rate, r.latencySamples, mag, spread, coh, u.micRMSDB, u.stability))
+        var secondOK = true
+        if two {
+            if let r2 = u.responses[1] {
+                let m2 = r2.magnitudeDB[band].reduce(0, +) / Double(band.count)
+                let c2 = r2.coherence[band].reduce(0, +) / Double(band.count)
+                say(String(format: "second mic: mean %.2f dB, coherence %.3f, latency %d samples", m2, c2, r2.latencySamples))
+                secondOK = abs(m2) < 1 && c2 > 0.9
+            } else { say("second mic: no response"); secondOK = false }
+        }
         let probes = [30.0, 50, 100, 1000, 5000, 10_000, 15_000, 18_000]
         say("dB at " + probes.map { String(format: "%.0f Hz: %.2f", $0, r.magnitudeDB[FrequencyGrid.index(of: $0)]) }.joined(separator: ", "))
         // A loop-through device has a single peak at lag 0 and no reflections.
@@ -73,7 +85,7 @@ enum SelfTest {
             periodicOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty && ir.samples[peak] > 0.8
         } else { say("periodic pink: no impulse response") }
 
-        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK
+        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK && secondOK
         say(ok ? "PASS" : "FAIL")
         return ok ? 0 : 1
     }
