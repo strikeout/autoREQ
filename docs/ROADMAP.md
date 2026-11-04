@@ -143,6 +143,9 @@ Effort: large. Risk: medium.
 
 ## Phase 4 — v1.5.0: SPL meter and SPL log
 
+Status: done in v1.5.0. The band levels come from the RTA with slow averaging. The impulse detector
+is simpler than the detector of IEC 60651.
+
 1. **Level calibration.** Read a 94 dB or 114 dB calibrator at 1 kHz. Keep the dBFS offset for
    each mic and input. The mic calibration file keeps the frequency correction.
 2. **Weightings.** Add the A, C and Z frequency weightings from IEC 61672-1 as biquad filters.

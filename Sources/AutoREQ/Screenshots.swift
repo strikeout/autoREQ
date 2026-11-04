@@ -16,7 +16,7 @@ enum Screenshots {
         session.stage = .results
         model.live = model.state.snapshots.first?.response
         demoSpectrum(model)
-        let shots: [(String, AppSection)] = [("measure", .measure), ("spectrum", .spectrum), ("calibration-results", .calibrate), ("room-analysis", .room),
+        let shots: [(String, AppSection)] = [("measure", .measure), ("spectrum", .spectrum), ("spl", .spl), ("calibration-results", .calibrate), ("room-analysis", .room),
                                              ("loopback", .loopback), ("target-curve", .target)]
         for (name, section) in shots {
             let root = ContentView(section: section, session: session)
@@ -61,6 +61,14 @@ enum Screenshots {
         let bands = model.spectrumBands, perBand3 = 10 * log10(1 / 30.0)
         model.spectrum[0] = bands.map { level($0.centre, perBand: perBand3) + jitter(0.4) }
         model.spectrumPeak[0] = bands.map { level($0.centre, perBand: perBand3) + 1.5 + jitter(0.3) }
+        // SPL meters for pink noise at about 78 dB(A), with a calibration offset of 115 dB.
+        model.state.spl.bandsThird = true
+        model.state.spl.calibrations["\(model.state.micDeviceUID ?? "")#0"] = 115
+        var l = SoundLevels()
+        l.a.fast = 78.4; l.a.slow = 78.1; l.a.leq = 77.9; l.a.maxFast = 84.6; l.c.fast = 83.2; l.c.peak = 101.7; l.z.peak = 103.9
+        l.leqWindows = [LeqWindow(seconds: 60, weighting: .a, value: 78.0), LeqWindow(seconds: 600, weighting: .a, value: 74.6), LeqWindow(seconds: 900, weighting: .a, value: 72.3)]
+        l.oshaDosePercent = 0.4; l.nioshDosePercent = 2.1
+        model.soundLevels[0] = l
         let fine = AppModel.spectrogramBands, perBand24 = 10 * log10(1 / 240.0)
         model.spectrogram = (0..<300).map { t in
             fine.map { b in Float(t < 80 ? floorLevel(b.centre, perBand: perBand24) + jitter(3) : level(b.centre, perBand: perBand24) + jitter(2.5)) }

@@ -69,7 +69,13 @@ enum SelfTest {
         // A sine at -20 dBFS RMS reads -20 dB in its band.
         engine.setOutput(channels: [0], signal: SignalSettings(kind: .sine, frequency: 1000), levelDBFS: -20)
         engine.resetSpectrum()
-        try? await Task.sleep(for: .seconds(2))
+        engine.setSoundLevel(calibrations: [0: 0])
+        engine.resetSoundLevel()
+        try? await Task.sleep(for: .seconds(2.5))
+        // Without a calibration, the meter reads dBFS RMS. A 1 kHz tone has almost no A or C weighting.
+        let splA = last?.soundLevels[0]?.a.leq1s ?? -200, splZ = last?.soundLevels[0]?.z.leq1s ?? -200
+        say(String(format: "spl: LAeq(1 s) %.2f dB, LZeq(1 s) %.2f dB for a -20 dBFS sine", splA, splZ))
+        let splOK = abs(splA + 20) < 0.3 && abs(splZ + 20) < 0.2
         let k = bands.firstIndex { abs($0.centre - 1000) < 1 }!
         let sineLevel = last?.spectrum[0]?[k] ?? -200
         say(String(format: "rta sine: 1 kHz band %.2f dB, status %@", sineLevel, last?.status.label ?? "-"))
@@ -102,7 +108,7 @@ enum SelfTest {
             periodicOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty && ir.samples[peak] > 0.8
         } else { say("periodic pink: no impulse response") }
 
-        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK && secondOK && sweepOK
+        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK && secondOK && sweepOK && splOK
         say(ok ? "PASS" : "FAIL")
         return ok ? 0 : 1
     }

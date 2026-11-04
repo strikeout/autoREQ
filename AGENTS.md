@@ -154,6 +154,10 @@ cat version.txt
   `MeasurementEngine.lastPeriod` reads one aligned period for each mic.
 - `LogSweep.impulse` deconvolves with a regularised division, so a wire gives a peak of about 0.81
   at 48 kHz. That is the peak of a 20 Hz–20 kHz band-limited impulse, and the in-band gain is 1.
+- `SoundLevelMeter` gets the raw samples of `inputRings` on each tick. The SPL calibration offset
+  has the key `uid#channel` in `SPLSettings.calibrations`. It is separate from the mic calibration file.
+- The Spectrum screen and the SPL screen share the RTA of the engine. `AppModel.engineBanding`
+  holds the band width that the engine uses now.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

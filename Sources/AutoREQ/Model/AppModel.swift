@@ -50,6 +50,60 @@ struct SpectrumSettings: Codable, Hashable {
     var ceilingDB = -20.0
 }
 
+/// The settings of the SPL screen.
+struct SPLSettings: Codable, Hashable {
+    /// The zero-based input channels of the mic device that have a meter.
+    var channels: [Int] = [0]
+    /// The dB SPL offset of each channel, keyed `uid#channel`. Missing means not calibrated.
+    var calibrations: [String: Double] = [:]
+    var meters: [MeterSpec] = MeterSpec.defaults
+    var calibratorDB = 94.0
+    var bandsThird = false
+}
+
+/// One tile of the SPL meter grid.
+struct MeterSpec: Codable, Hashable, Identifiable {
+    enum Metric: String, Codable, CaseIterable, Identifiable {
+        case laf = "LAF", las = "LAS", lai = "LAI", lcf = "LCF", lcs = "LCS", lzf = "LZF", lzs = "LZS"
+        case laeq = "LAeq", lceq = "LCeq", lzeq = "LZeq", lafmax = "LAFmax", lasmax = "LASmax"
+        case lcpeak = "LCpeak", lzpeak = "LZpeak", laeq1 = "LAeq 1 min", laeq10 = "LAeq 10 min", laeq15 = "LAeq 15 min"
+        case osha = "OSHA dose", niosh = "NIOSH dose", osha8 = "OSHA 8 h projected", niosh8 = "NIOSH 8 h projected"
+        var id: String { rawValue }
+        var isDose: Bool { [.osha, .niosh, .osha8, .niosh8].contains(self) }
+
+        func value(_ l: SoundLevels) -> Double? {
+            switch self {
+            case .laf: l.a.fast
+            case .las: l.a.slow
+            case .lai: l.a.impulse
+            case .lcf: l.c.fast
+            case .lcs: l.c.slow
+            case .lzf: l.z.fast
+            case .lzs: l.z.slow
+            case .laeq: l.a.leq
+            case .lceq: l.c.leq
+            case .lzeq: l.z.leq
+            case .lafmax: l.a.maxFast
+            case .lasmax: l.a.maxSlow
+            case .lcpeak: l.lcPeak
+            case .lzpeak: l.lzPeak
+            case .laeq1: l.leqWindows.first { $0.seconds == 60 }?.value
+            case .laeq10: l.leqWindows.first { $0.seconds == 600 }?.value
+            case .laeq15: l.leqWindows.first { $0.seconds == 900 }?.value
+            case .osha: l.oshaDosePercent
+            case .niosh: l.nioshDosePercent
+            case .osha8: l.oshaProjected8hPercent
+            case .niosh8: l.nioshProjected8hPercent
+            }
+        }
+    }
+    var id = UUID()
+    var channel = 0
+    var metric: Metric
+
+    static let defaults: [MeterSpec] = [.laf, .las, .laeq, .lcpeak, .laeq1, .laeq15, .osha, .niosh].map { MeterSpec(metric: $0) }
+}
+
 /// The settings of the capture timer on the Measure screen.
 struct CaptureTimer: Codable, Hashable {
     var intervalSeconds = 10.0
@@ -93,6 +147,8 @@ struct PersistedState: Codable {
     var referenceSnapshotIDStored: UUID?
     var liveDelayMsStored: Double?
     var timerStored: CaptureTimer?
+    var splStored: SPLSettings?
+    var spl: SPLSettings { get { splStored ?? SPLSettings() } set { splStored = newValue } }
 
     /// More mic channels of the mic device. Each one measures at the same time as the main mic.
     var extraMicChannels: [Int] { get { extraMicChannelsStored ?? [] } set { extraMicChannelsStored = newValue } }
@@ -158,6 +214,17 @@ final class AppModel {
     var spectrogram: [[Float]] = []
     static let spectrogramMaxFrames = 3000
     private var spectrumRunning = false
+    /// The band width that the engine uses now. The Spectrum and SPL screens set it.
+    private var engineBanding = Banding.oct3
+
+    // SPL
+    var soundLevels: [Int: SoundLevels] = [:]
+    var splRunning = false
+    /// The file of the running SPL log, or nil.
+    var splLogURL: URL?
+    private var splLog: FileHandle?
+    private var splLogTask: Task<Void, Never>?
+    private var splActivity: NSObjectProtocol?
     private var loadedFile: (path: String, rate: Double, samples: [Float])?
     var micPermission = AVCaptureDevice.authorizationStatus(for: .audio)
 
@@ -257,6 +324,7 @@ final class AppModel {
                     self.live = self.liveByChannel[self.state.micChannel]
                 }
                 if self.spectrumRunning { self.receiveSpectrum(u) }
+                if self.splRunning || self.splLog != nil { self.soundLevels = u.soundLevels }
                 if self.autoCapturing && u.stability >= 1 {
                     self.autoCapturing = false
                     self.takeSnapshot()
@@ -278,6 +346,8 @@ final class AppModel {
         noiseChannels = []
         playingSignal = nil
         spectrumRunning = false
+        splRunning = false
+        stopSPLLog()
         liveByChannel = [:]
         stopTimer()
         status = .idle
@@ -366,9 +436,94 @@ final class AppModel {
         generatorChanged()
     }
 
+    // MARK: SPL
+
+    private func splKey(_ channel: Int) -> String { "\(state.micDeviceUID ?? "")#\(channel)" }
+
+    /// The dB SPL offset of `channel`, or nil if the channel has no calibration.
+    func splCalibration(_ channel: Int) -> Double? { state.spl.calibrations[splKey(channel)] }
+
+    /// Starts the meters and the band levels of the SPL screen.
+    func startSPL() async {
+        guard persists, await startEngine() else { return }
+        splRunning = true
+        splSettingsChanged()
+    }
+
+    func stopSPL() {
+        guard splRunning else { return }
+        splRunning = false
+        if splLog == nil { engine?.setSoundLevel(calibrations: [:]) }
+        spectrumRunning = false
+        engine?.setSpectrum(channels: [], banding: engineBanding, averaging: .slow)
+    }
+
+    /// Sends the SPL channels, their calibrations and the band width to the engine.
+    func splSettingsChanged() {
+        guard splRunning || splLog != nil else { return }
+        let s = state.spl
+        engine?.setSoundLevel(calibrations: Dictionary(uniqueKeysWithValues: s.channels.map { ($0, splCalibration($0) ?? 0) }))
+        spectrum = [:]
+        spectrumPeak = [:]
+        spectrumRunning = true
+        engineBanding = s.bandsThird ? .oct3 : .oct1
+        engine?.setSpectrum(channels: s.channels, banding: engineBanding, averaging: .slow)
+    }
+
+    /// Reads the calibrator tone on `channel` for 3 s and stores the offset to the calibrator level.
+    func calibrateSPL(channel: Int) async {
+        guard let e = engine else { return }
+        try? await Task.sleep(for: .seconds(3))
+        guard let rms = e.rmsDBFS(channel: channel, seconds: 3), rms > -90 else {
+            engineError = "The app hears no calibrator tone on Ch \(channel + 1)."
+            return
+        }
+        state.spl.calibrations[splKey(channel)] = LevelCalibration.offset(measuredRMSDBFS: rms, referenceDBSPL: state.spl.calibratorDB)
+        splSettingsChanged()
+        engine?.resetSoundLevel()
+    }
+
+    /// Writes one CSV line each second to a file that the user selects. The log continues when the
+    /// window closes, and macOS does not put the app to sleep while it runs.
+    func startSPLLog() {
+        let panel = NSSavePanel()
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        panel.nameFieldStringValue = "AutoREQ SPL \(f.string(from: Date())).csv"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let chans = state.spl.channels
+        let header = SPLLogFormat.header(channels: chans.map { "Ch\($0 + 1)" }, leqWindows: [(60, .a), (600, .a), (900, .a)])
+        guard FileManager.default.createFile(atPath: url.path, contents: Data((header + "\n").utf8)), let h = try? FileHandle(forWritingTo: url) else {
+            engineError = "The app cannot write \(url.lastPathComponent)."
+            return
+        }
+        h.seekToEndOfFile()
+        splLog = h
+        splLogURL = url
+        splActivity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "SPL log")
+        splLogTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                let rows = chans.compactMap { soundLevels[$0] }
+                guard rows.count == chans.count else { continue }
+                splLog?.write(Data((SPLLogFormat.row(time: Date(), levels: rows) + "\n").utf8))
+            }
+        }
+    }
+
+    func stopSPLLog() {
+        splLogTask?.cancel()
+        splLogTask = nil
+        try? splLog?.close()
+        splLog = nil
+        splLogURL = nil
+        if let a = splActivity { ProcessInfo.processInfo.endActivity(a) }
+        splActivity = nil
+    }
+
     // MARK: Spectrum
 
-    var spectrumBands: [Band] { Band.bands(state.spectrum.banding) }
+    var spectrumBands: [Band] { Band.bands(engineBanding) }
     nonisolated static let spectrogramBands = Band.bands(.oct24)
 
     func startSpectrum() async {
@@ -389,6 +544,7 @@ final class AppModel {
         spectrumPeak = [:]
         guard spectrumRunning else { return }
         let s = state.spectrum
+        engineBanding = s.banding
         engine?.setSpectrum(channels: s.channels, banding: s.banding, averaging: s.averaging)
     }
 

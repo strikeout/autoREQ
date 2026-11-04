@@ -25,6 +25,8 @@ final class MeasurementEngine: @unchecked Sendable {
         var spectrum: [Int: [Double]] = [:]
         /// The 1/24-octave levels of the last frame of the first spectrum channel.
         var spectrogramFrame: [Float]?
+        /// The sound levels of each SPL channel.
+        var soundLevels: [Int: SoundLevels] = [:]
     }
 
     enum Status: Equatable {
@@ -111,6 +113,8 @@ final class MeasurementEngine: @unchecked Sendable {
     private var spectrumAnalyzers: [Int: SpectrumAnalyzer] = [:]
     private var banding = Banding.oct3
     private var spectrumAveraging = Averaging.fast
+    private var meters: [Int: SoundLevelMeter] = [:]
+    private var meterRead: [Int: Int] = [:]
     /// Follows the delay of each mic from its impulse response. This also removes clock drift.
     var clockDriftCorrection = false
     var onUpdate: ((Update) -> Void)?
@@ -237,6 +241,31 @@ final class MeasurementEngine: @unchecked Sendable {
 
     func resetSpectrum() { queue.async { for a in self.spectrumAnalyzers.values { a.reset() } } }
 
+    /// Runs one sound level meter for each input channel in `calibrations` (channel → dB SPL offset).
+    /// A channel that already has a meter keeps its values. An empty set stops the meters.
+    func setSoundLevel(calibrations: [Int: Double]) {
+        let cal = calibrations.filter { $0.key < Self.maxSpectrumChannels }
+        queue.async {
+            self.meters = self.meters.filter { cal[$0.key] != nil }
+            self.meterRead = self.meterRead.filter { cal[$0.key] != nil }
+            for (c, db) in cal {
+                if let m = self.meters[c] { m.calibrationDB = db } else { self.meters[c] = SoundLevelMeter(sampleRate: self.sampleRate, calibrationDB: db) }
+            }
+        }
+    }
+
+    /// Clears the Leq, the maxima, the peaks and the doses of all meters.
+    func resetSoundLevel() { queue.async { for m in self.meters.values { m.reset() } } }
+
+    /// The RMS level in dBFS of the last `seconds` of an input channel, for the calibrator.
+    func rmsDBFS(channel: Int, seconds: Double) -> Double? {
+        guard channel < Self.maxSpectrumChannels else { return nil }
+        let ring = inputRings[channel], n = Int(seconds * sampleRate)
+        guard let x = ring.read(from: ring.count - n, count: n) else { return nil }
+        let ms = x.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(n)
+        return 10 * log10(max(ms, 1e-20))
+    }
+
     func setAveraging(_ a: Averaging) { queue.async { self.averaging = a; for m in self.mics { m.analyzer.averaging = a } } }
 
     /// Turns the frequency-dependent windows on or off. The averages restart, and the delays stay.
@@ -292,6 +321,7 @@ final class MeasurementEngine: @unchecked Sendable {
         var update = Update(response: nil, micPeakDB: 20 * log10(max(Double(pk), 1e-7)), micRMSDB: 20 * log10(max(Double(rms), 1e-7)), status: .idle, stability: 0)
         defer { let u = update; DispatchQueue.main.async { self.onUpdate?(u) } }
         analyzeSpectrum(&update)
+        measureSoundLevel(&update)
         let rc = refRing.count
         let newSamples = max(0, rc - lastRefCount)
         lastRefCount = rc
@@ -348,6 +378,18 @@ final class MeasurementEngine: @unchecked Sendable {
         let spread = (history.max() ?? 0) - (history.min() ?? 0)
         stableFrames = (history.count == 5 && spread < 0.25 && coh > 0.6) ? stableFrames + 1 : max(0, stableFrames - 1)
         update.stability = min(1, Double(stableFrames) / 15)
+    }
+
+    /// Feeds each meter the samples since the last tick. After a gap, it starts again from the newest 0.1 s.
+    private func measureSoundLevel(_ update: inout Update) {
+        for (c, m) in meters {
+            let ring = inputRings[c], cnt = ring.count
+            var from = meterRead[c] ?? (cnt - 4800)
+            if cnt - from > ring.capacity / 2 { from = cnt - 4800 }
+            if cnt > from, let x = ring.read(from: from, count: cnt - from) { m.process(x) }
+            meterRead[c] = cnt
+            update.soundLevels[c] = m.levels()
+        }
     }
 
     private func analyzeSpectrum(_ update: inout Update) {

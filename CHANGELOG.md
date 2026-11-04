@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.0
+
+- The new SPL screen calibrates each input with a 94 dB or 114 dB calibrator.
+- The meters show A, C and Z levels with Fast, Slow and Impulse time weighting, Leq, Lmax and peaks.
+- The meters also show rolling Leq values for 1, 10 and 15 min, and the OSHA and NIOSH noise dose.
+- You can add, remove and arrange the meters in a grid.
+- The screen shows the band levels in octaves or 1/3 octaves.
+- The SPL log writes one CSV line each second. It continues when the window closes.
+
 ## v1.4.0
 
 - The Room Analysis screen measures with a log sweep. A sweep gives a 2 s impulse response and the harmonic distortion.

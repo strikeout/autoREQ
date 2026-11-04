@@ -20,6 +20,10 @@ the spectrograph, the pink noise starts after 8 s of room noise.
 
 ![The Spectrum screen with an RTA and a spectrograph](docs/screenshots/spectrum.png)
 
+The SPL screen shows the calibrated meters, the noise dose and the band levels.
+
+![The SPL screen with the meter grid and the 1/3-octave band levels](docs/screenshots/spl.png)
+
 The results page shows each channel after the correction, with the target curve as a dashed line.
 
 ![The calibration results with the corrected response of each channel](docs/screenshots/calibration-results.png)
@@ -63,6 +67,9 @@ The Target Curve screen shows the selected preset or your custom curve.
   app shows EDT, T20, T30, C50, C80 and D50 in octave bands or 1/3-octave bands. It also shows Ts
   and the direct-to-reverberant ratio. You can compare impulse responses, and export or import
   them as WAV files.
+- **SPL meter:** The SPL screen calibrates each input with a 94 dB or 114 dB calibrator. It shows
+  A, C and Z levels with Fast, Slow and Impulse time weighting, Leq, Lmax and peaks. It also shows
+  the OSHA and NIOSH noise dose, and the band levels. A log writes one CSV line each second.
 - **Target curves:** Five preset curves are available. You can also make a custom curve from
   points.
 - **Loopback:** The app captures the system audio from a virtual audio device. It applies the
@@ -213,6 +220,17 @@ The T60 from Q is the decay time of a resonance with the measured Q. The measure
 the impulse response in a 1/3-octave band. A mode with a long decay sounds boomy. EQ decreases
 its level, but the room keeps some of the decay.
 
+### Measure the sound level
+
+1. Open **SPL**, and turn on the input channels of the mics.
+2. Put an acoustic calibrator on a mic, and turn the calibrator on.
+3. Select the calibrator level, then click **Calibrate** for that channel.
+4. Remove the calibrator. The meters now read dB SPL.
+5. To keep the values, click **Start Log…** and select a file.
+
+The meters and the doses start again when you click **Reset Leq, maxima and doses**. The calibration
+uses the 1 kHz tone only. Import the calibration file of the mic for the frequency response.
+
 ### Use the loopback correction
 
 1. Install a virtual audio device, for example BlackHole 2ch.
@@ -267,6 +285,9 @@ or `FAIL`.
   The sweep impulse response is 2 s long, so it cannot measure a decay longer than about 1.5 s.
 - The RTA uses one FFT of 16384 samples. Below about 40 Hz, a band of 1/24 or 1/48 octave is
   narrower than one FFT bin. Adjacent bands then show the same level.
+- The SPL meter is not a certified sound level meter. Up to 10 kHz, the A and C filters stay in
+  the Class 1 limits at 44.1 kHz and above. The app does not claim a class.
+- The SPL meter works on the first 8 input channels of the mic device.
 - The generator plays the first 5 minutes of an audio file only.
 - Only live measurements have an impulse response. An imported CSV file has none. For such a
   file, the app shows no reflections and no measured decay.
