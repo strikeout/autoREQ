@@ -28,6 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let i = args.firstIndex(of: "--screenshots"), i + 1 < args.count {
             Task { @MainActor in exit(await Screenshots.run(directory: args[i + 1])) }
         }
+        if let i = args.firstIndex(of: "--flowtest"), i + 1 < args.count {
+            Task { @MainActor in exit(await FlowTest.run(deviceName: args[i + 1])) }
+        }
         if let i = args.firstIndex(of: "--selftest"), i + 1 < args.count {
             Task { @MainActor in exit(await SelfTest.run(deviceName: args[i + 1])) }
         }

@@ -88,6 +88,10 @@ cat version.txt
 - **Match the surrounding code.** Its naming, its comment density, its idioms — not yours.
 - **Run the test command before saying something works.** If there are no tests, say that
   plainly instead of implying verification.
+- **Run the flow test before you report a feature or a fix as done.** Build the app with
+  `sh scripts/bundle.sh`, then run `sh scripts/flowtest.sh "VB-Cable"`. A new screen or a new
+  user flow gets a step in `Sources/AutoREQ/FlowTest.swift` in the same change. `swift test`
+  does not draw the views, and a view crash in v1.8.2 passed five reviews and the self-test.
 - **Never commit secrets.** Keys, tokens and `.env` files stay out of the repo; document the
   *names* of the required env vars here, never their values.
 - **Commit and push only when asked.** If on the default branch, branch first.
@@ -149,8 +153,8 @@ cat version.txt
 - Delay tracking (the setting `clockDrift`) replaces the old search every 3 s. It reads the
   GCC-PHAT peak of the newest impulse frame. A shift must show in two frames in a row, and a shift
   of one sample does not count. An impulse frame must lie after the last signal change.
-- The main mic ring and the ring of each extra mic hold 12.5 s at the sample rate, for a 10 s sweep
-  and its tail. The other input rings hold 2^18 samples. The delay search range stays shorter than
+- The main mic ring and the ring of each extra mic hold 12.5 s at the sample rate. That is a 10 s
+  sweep and its tail. The other input rings hold 2^18 samples. The delay search range stays shorter than
   the period of a repeating signal (periodic pink, sweep or file).
 - The mic calibration of the main mic has the device UID as its key. An extra mic uses `uid#channel`.
 - The sweep measurement plays `SignalKind.logSweep`: one sweep and 2 s of silence, looped. The
@@ -176,6 +180,11 @@ cat version.txt
   a bind failure reaches `AppModel.remoteError`. The web viewer polls the API, so there is no WebSocket.
   A restart waits until the old listener reports `.cancelled`, because the old listener holds the port.
   `JSONSerialization` raises an exception on NaN, so check `isValidJSONObject` before each reply.
+- `FlowTest` uses `AppModel(test:)`: a model with real audio devices that saves nothing. It
+  draws each screen in a hidden window with `cacheDisplay`, so a crash in a view body stops the
+  test. `open -W` exits with 0 also after a crash, so `scripts/flowtest.sh` checks the last line.
+- When a speaker or a signal changes, `AppModel` clears `live` and `liveByChannel`. Otherwise the
+  calibration can store the response of the previous speaker for a mic that hears nothing.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

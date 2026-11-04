@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8.4
+
+- A new flow test drives each screen through its user flow on a loop-through device. `scripts/flowtest.sh` runs it with the self-test.
+- With several mics, the guided calibration no longer drops a speaker that the main mic does not hear. Another mic gives its measurement.
+- A change of the speaker or the signal clears the old live responses. Before, a mic that heard nothing could keep the response of the previous speaker.
+
 ## v1.8.3
 
 - The Room Analysis screen no longer stops the app after a sweep. Before, it drew the new impulse response with the old analysis for a moment.

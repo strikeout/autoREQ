@@ -124,7 +124,8 @@ final class CalibrationSession {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
                 if Task.isCancelled { return }
-                if app.live != nil, app.status == .measuring {
+                // Each mic with a response counts. The main mic can miss a speaker that another mic hears.
+                if !app.liveByChannel.isEmpty {
                     for (ch, r) in app.liveByChannel { sets[ch, default: [:]][s.id] = r }
                 } else { measureMessage = "\(s.name) gave no usable signal. It will be skipped." }
                 app.setNoise([])
@@ -132,7 +133,15 @@ final class CalibrationSession {
             }
             currentSpeaker = nil
             let a = areaIndex
-            for ch in sets.keys.sorted() where measurements.filter({ $0.area == a }).count < positions { measurements.append((a, sets[ch]!)) }
+            let ordered = sets.keys.sorted().map { sets[$0]! }
+            let room = max(0, positions - measurements.filter { $0.area == a }.count)
+            var keep = Array(ordered.prefix(room))
+            // A kept mic can miss a speaker. Then the speaker takes the measurement of a mic that the area does not need.
+            // Without this, the speaker drops out of the result.
+            for extra in ordered.dropFirst(room) {
+                for i in keep.indices { for (id, r) in extra where keep[i][id] == nil { keep[i][id] = r } }
+            }
+            for set in keep { measurements.append((a, set)) }
             if position + 1 < rounds {
                 waitingForMove = true
                 measureMessage = area.size.placement

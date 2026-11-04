@@ -246,11 +246,14 @@ final class AppModel {
 
     static let palette = ["#FFC400", "#4FC3F7", "#EF5350", "#66BB6A", "#AB47BC", "#FF7043", "#26C6DA", "#D4E157"]
 
-    /// False for the demo model of the screenshot mode, so that it never writes the user's state file.
+    /// False for the demo model and the flow-test model, so that they never write the user's state file.
     private let persists: Bool
+    /// True for the demo model of the screenshot mode. It uses no audio device.
+    private let isDemo: Bool
 
     init() {
         persists = true
+        isDemo = false
         if let data = try? Data(contentsOf: Self.stateURL), let s = try? JSONDecoder().decode(PersistedState.self, from: data) {
             state = s
         }
@@ -260,9 +263,21 @@ final class AppModel {
     /// Makes a model that shows `demo` and saves nothing.
     init(demo: PersistedState) {
         persists = false
+        isDemo = true
         state = demo
         devices = AudioDevice.all()
     }
+
+    /// Makes a model for the flow test. It uses the audio devices of `state` and saves nothing.
+    init(test: PersistedState) {
+        persists = false
+        isDemo = false
+        state = test
+        devices = AudioDevice.all()
+    }
+
+    /// The measurement of the Room Analysis screen: "live" or a snapshot ID. The flow test sets it.
+    var roomSourceID = "live"
 
     nonisolated static var stateURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("AutoREQ", isDirectory: true)
@@ -388,6 +403,9 @@ final class AppModel {
 
     /// Plays pink noise for the guided calibration, or stops the generator with an empty set.
     func setNoise(_ channels: Set<Int>, levelDBFS: Double = -20) {
+        // A new channel set restarts the analysis. The responses of the old set must not stay,
+        // or the calibration can store them for the next speaker.
+        if !channels.isEmpty && channels != noiseChannels { liveByChannel = [:]; live = nil }
         noiseChannels = channels
         playingSignal = channels.isEmpty ? nil : .pink
         if channels.isEmpty { autoCapturing = false; stopTimer() }
@@ -433,6 +451,7 @@ final class AppModel {
             fileCrestDB = rms > 0 ? 20 * log10(peak / rms) : nil
         }
         let chans = generatorChannels
+        if chans != noiseChannels || g.signal != playingSignal { liveByChannel = [:]; live = nil }
         noiseChannels = chans
         playingSignal = g.signal
         // A tone gives no transfer function, so the last one must not stay on the screen.
@@ -518,8 +537,8 @@ final class AppModel {
 
     /// Starts the server on 127.0.0.1, or on all interfaces with `lan`. The server object stays after a stop,
     /// so the token stays the same until the app quits.
-    func startRemote(lan: Bool) {
-        let r = remote ?? RemoteServer(model: self)
+    func startRemote(lan: Bool, port: UInt16 = RemoteServer.defaultPort) {
+        let r = remote ?? RemoteServer(model: self, port: port)
         r.onFailure = { [weak self] msg in self?.remoteError = msg }
         do {
             try r.start(lan: lan)
@@ -573,7 +592,7 @@ final class AppModel {
 
     /// Starts the meters and the band levels of the SPL screen.
     func startSPL() async {
-        guard persists, await startEngine() else { return }
+        guard !isDemo, await startEngine() else { return }
         splRunning = true
         splSettingsChanged()
     }
@@ -622,12 +641,17 @@ final class AppModel {
 
     /// Writes one CSV line each second to a file that the user selects. The log continues when the
     /// window closes, and macOS does not put the app to sleep while it runs.
-    func startSPLLog() {
-        let panel = NSSavePanel()
-        let f = DateFormatter()
-        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
-        panel.nameFieldStringValue = "AutoREQ SPL \(f.string(from: Date())).csv"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+    /// - Parameter file: The log file. Nil asks the user for a file.
+    func startSPLLog(to file: URL? = nil) {
+        let url: URL
+        if let file { url = file } else {
+            let panel = NSSavePanel()
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+            panel.nameFieldStringValue = "AutoREQ SPL \(f.string(from: Date())).csv"
+            guard panel.runModal() == .OK, let picked = panel.url else { return }
+            url = picked
+        }
         let chans = state.spl.channels
         splLogChannels = chans
         let header = SPLLogFormat.header(channels: chans.map { "Ch\($0 + 1)" }, leqWindows: [(60, .a), (600, .a), (900, .a)])
@@ -668,7 +692,7 @@ final class AppModel {
 
     func startSpectrum() async {
         // The demo model of the screenshot mode shows its own data and uses no audio device.
-        guard persists, await startEngine() else { return }
+        guard !isDemo, await startEngine() else { return }
         spectrumRunning = true
         spectrumSettingsChanged()
     }

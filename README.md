@@ -289,6 +289,20 @@ approximate and cover 30 Hz to 5 kHz only. If you use an iPhone as the mic over 
 **Mic Mode → Standard** in the menu bar. Voice Isolation removes steady noise and makes the
 measurement wrong.
 
+## Run the flow test
+
+The flow test drives each screen through its user flow on a loop-through device. It measures and
+takes snapshots, and it runs the timer, the spectrum and a sweep. It also runs the SPL calibration
+and log, a guided calibration, the latency check and the remote API. The test uses no saved state.
+
+```bash
+sh scripts/bundle.sh
+sh scripts/flowtest.sh "VB-Cable"
+```
+
+The script runs the self-test and the flow test. It exits with 1 when a check fails or the app
+stops.
+
 ## Check the latency
 
 The latency drift check in **Settings → Audio → Diagnostics** measures the latency several times. A

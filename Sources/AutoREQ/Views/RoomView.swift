@@ -5,7 +5,6 @@ import SwiftUI
 /// The impulse response, the energy-time curve, the reflections and the room modes of one measurement.
 struct RoomView: View {
     @Environment(AppModel.self) private var model
-    @State private var sourceID = "live"
     @State private var span: Span = .ms100
     @State private var result: Result?
     @State private var compareIDs: Set<UUID> = []
@@ -58,6 +57,8 @@ struct RoomView: View {
         var banding: Banding
     }
 
+    private var sourceID: String { model.roomSourceID }
+
     private var snapshot: Snapshot? { model.state.snapshots.first { $0.id.uuidString == sourceID } }
 
     private var source: Response? {
@@ -73,7 +74,7 @@ struct RoomView: View {
                     .foregroundStyle(.secondary)
                 sweepPanel
                 HStack {
-                    Picker("Measurement", selection: $sourceID) {
+                    Picker("Measurement", selection: Binding(get: { model.roomSourceID }, set: { model.roomSourceID = $0 })) {
                         Text("Live").tag("live")
                         ForEach(model.state.snapshots) { s in
                             Text(s.response.impulse == nil ? "\(s.name) (no impulse response)" : s.name).tag(s.id.uuidString)
