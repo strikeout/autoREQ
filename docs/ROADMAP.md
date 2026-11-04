@@ -174,6 +174,8 @@ Effort: medium. Risk: low.
 
 ## Phase 5 — v1.6.0: Calibration items from the Omnissiah manual
 
+Status: done in v1.6.0. The thresholds of the diagnostic cards come from synthetic data only.
+
 1. Add the phase correction pass to the optimizer.
 2. Add the space plan of the Complete Measurement mode. It has an area size and extra listening
    areas with a weight from 0.25 to 1.0.

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.6.0
+
+- The optional phase correction adds all-pass filters, so the subs and the tops stay in phase at the crossover.
+- The Complete Measurement mode has a space plan. Extra listening areas have a name, a size, positions and a weight.
+- Diagnostic cards explain boundary nulls, room modes, reflections, weak measurements and uncorrected peaks.
+- The cards show live on the Measure screen and on the results page.
+- The latency drift check measures the latency 3 to 20 times and writes a CSV file.
+- Settings has a buffer size and a Test Speakers button.
+
 ## v1.5.0
 
 - The new SPL screen calibrates each input with a 94 dB or 114 dB calibrator.

@@ -106,3 +106,28 @@ private func sumDB(_ a: Response, _ b: Response, at f: Double) -> Double {
     #expect(abs((r?.magnitudeDB[200] ?? 0) - expected) < 0.01, "\(r?.magnitudeDB[200] ?? 0) vs \(expected)")
     #expect(ListeningArea(name: "Main", size: .venue).positions == 9)
 }
+
+@Test func plannerPhaseCorrectionFixesARotatedSub() {
+    let sr = 48_000.0
+    var top = Response.flat(sampleRate: sr).applying([BiquadCoefficients(type: .highPass, frequency: 70, gainDB: 0, q: 0.707, sampleRate: sr)])
+    top.latencySamples = 1000
+    // The sub has an extra phase rotation that no delay can remove.
+    var sub = Response.flat(sampleRate: sr).applying([BiquadCoefficients(type: .allPass, frequency: 60, gainDB: 0, q: 0.7, sampleRate: sr)])
+    sub.latencySamples = 1000
+    let speakers = SystemTemplate.stereoSub.speakers
+    let m: [UUID: Response] = [speakers[0].id: top, speakers[1].id: top, speakers[2].id: sub]
+    var opt = CorrectionOptions()
+    opt.filterCount = 0
+    opt.generations = .fastest
+    func dip(_ on: Bool) -> Double {
+        opt.phaseCorrection = on
+        let r = CalibrationPlanner(speakers: speakers, measurements: m, target: .absoluteFlat, options: opt).run()
+        // The loss of the complex sum against the magnitude sum at the crossover.
+        let i = FrequencyGrid.index(of: r.channels[0].correction.crossover!.frequency)
+        let magSum = r.channels.map { pow(10, $0.after.magnitudeDB[i] / 20) }.reduce(0, +)
+        return 20 * log10(magSum) - r.systemAfter!.magnitudeDB[i]
+    }
+    let without = dip(false), with = dip(true)
+    #expect(with <= without + 0.1, "with \(with) dB, without \(without) dB")
+    #expect(with < 1)
+}

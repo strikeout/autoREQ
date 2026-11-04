@@ -148,6 +148,14 @@ struct PersistedState: Codable {
     var liveDelayMsStored: Double?
     var timerStored: CaptureTimer?
     var splStored: SPLSettings?
+    var areasStored: [ListeningArea]?
+    /// The I/O buffer size in frames. Nil keeps the size of the device.
+    var bufferFrames: Int?
+    /// The space plan of the Complete Measurement mode. The first area is the main area.
+    var areas: [ListeningArea] {
+        get { areasStored ?? [ListeningArea(name: "Main", size: .singleSeat)] }
+        set { areasStored = newValue }
+    }
     var spl: SPLSettings { get { splStored ?? SPLSettings() } set { splStored = newValue } }
 
     /// More mic channels of the mic device. Each one measures at the same time as the main mic.
@@ -307,6 +315,10 @@ final class AppModel {
         if engine != nil { return true }
         guard await requestMic() else { engineError = "Microphone access is off. Turn it on in System Settings → Privacy & Security → Microphone."; return false }
         guard let mic = micDevice, let out = outputDevice else { engineError = "Choose a measurement mic and a speaker output in Settings → Audio."; return false }
+        if let b = state.bufferFrames {
+            AudioDevice.setBufferSize(b, for: out.id)
+            AudioDevice.setBufferSize(b, for: mic.id)
+        }
         do {
             let e = try MeasurementEngine(outputDevice: out.id, inputDevice: mic.id, micChannels: [state.micChannel] + state.extraMicChannels,
                                           sampleRate: state.sampleRate, averaging: state.averaging, multiWindow: state.multiWindow)
@@ -434,6 +446,43 @@ final class AppModel {
         state.generator.signal.kind = .file
         state.generator.signal.filePath = url.path
         generatorChanged()
+    }
+
+    // MARK: Latency drift check
+
+    /// The result text of the last latency drift check.
+    var latencyReport: String?
+    var latencyCheckRunning = false
+
+    /// Measures the latency `runs` times with pink noise on `channel`.
+    /// With `reopen`, the engine opens the audio streams again before each run.
+    /// The check writes a CSV file to the diagnostics folder of the app.
+    func latencyDriftCheck(runs: Int, reopen: Bool, channel: Int) async {
+        latencyCheckRunning = true
+        defer { latencyCheckRunning = false }
+        var values: [Double] = []
+        for k in 1...runs {
+            if reopen { stopEngine() }
+            guard await startEngine() else { return }
+            latencyReport = "Run \(k) of \(runs)…"
+            live = nil
+            setNoise([channel], levelDBFS: -24)
+            let start = Date()
+            while Date().timeIntervalSince(start) < 8 && (live == nil || status != .measuring) { try? await Task.sleep(for: .milliseconds(100)) }
+            if let r = live { values.append(Double(r.latencySamples) / r.sampleRate * 1000) }
+            setNoise([])
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        guard let lo = values.min(), let hi = values.max() else { latencyReport = "No run found the delay. Check the levels and the routing."; return }
+        let dir = AppModel.stateURL.deletingLastPathComponent().appendingPathComponent("diagnostics", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        let url = dir.appendingPathComponent("latency-\(f.string(from: Date())).csv")
+        let csv = "run,latency_ms\n" + values.enumerated().map { String(format: "%d,%.4f", $0.offset + 1, $0.element) }.joined(separator: "\n") + "\n"
+        try? csv.write(to: url, atomically: true, encoding: .utf8)
+        latencyReport = String(format: "%d of %d runs: latency %.3f–%.3f ms, spread %.3f ms. The CSV file is %@.", values.count, runs, lo, hi, hi - lo, url.lastPathComponent)
+            + (hi - lo > 0.1 ? " The latency changes between runs. Use one interface for the mic and the speakers, or turn on Track Delay." : "")
     }
 
     // MARK: SPL

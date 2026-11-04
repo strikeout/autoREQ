@@ -117,6 +117,9 @@ struct TargetCurveView: View {
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var confirmReset = false
+    @State private var testing = false
+    @State private var driftRuns = 5
+    @State private var driftReopen = false
 
     var body: some View {
         @Bindable var model = model
@@ -154,12 +157,40 @@ struct SettingsView: View {
                     Picker("Device", selection: $model.state.outputDeviceUID) {
                         ForEach(model.devices.filter { $0.outputChannels > 0 }) { Text("\($0.name) (\($0.outputChannels) ch)").tag(String?.some($0.uid)) }
                     }
+                    HStack {
+                        Text("Test Speakers")
+                            .padding(.horizontal, 12).padding(.vertical, 4)
+                            .background(testing ? Color.yellow.opacity(0.4) : Color.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                            .onLongPressGesture(minimumDuration: 0.01, pressing: { down in
+                                testing = down
+                                if down {
+                                    Task { if await model.startEngine() { model.setNoise(Set(0..<(model.engine?.outputChannelCount ?? 2)), levelDBFS: -30) } }
+                                } else { model.setNoise([]) }
+                            }, perform: {})
+                        Text("Hold to play pink noise at −30 dBFS on all channels.").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 Section("Audio Engine") {
                     Picker("Sample Rate", selection: $model.state.sampleRate) {
                         ForEach([44_100.0, 48_000, 88_200, 96_000, 176_400, 192_000], id: \.self) { Text("\(String(format: "%g", $0 / 1000)) kHz").tag($0) }
                     }
                     Text("AutoREQ sets the mic and the output device to this rate.").font(.caption).foregroundStyle(.secondary)
+                    Picker("Buffer Size", selection: $model.state.bufferFrames) {
+                        Text("Auto").tag(Int?.none)
+                        ForEach([64, 128, 256, 512, 1024, 2048], id: \.self) { Text("\($0) samples").tag(Int?.some($0)) }
+                    }
+                    Text("A larger buffer stops clicks on a slow Mac. Auto keeps the size of the device.").font(.caption).foregroundStyle(.secondary)
+                }
+                Section("Diagnostics") {
+                    HStack {
+                        Picker("Latency Drift Check", selection: $driftRuns) { ForEach([3, 5, 10, 20], id: \.self) { Text("\($0) runs").tag($0) } }.frame(width: 260)
+                        Picker("", selection: $driftReopen) { Text("Baseline").tag(false); Text("Re-open streams").tag(true) }.frame(width: 160)
+                        Button("Run") { Task { await model.latencyDriftCheck(runs: driftRuns, reopen: driftReopen, channel: 0) } }
+                            .disabled(model.latencyCheckRunning || !model.noiseChannels.isEmpty)
+                    }
+                    if let r = model.latencyReport { Text(r).font(.caption) }
+                    Text("Stop the measurement first. The check plays pink noise on Ch 1 and measures the latency in each run. Baseline keeps the streams open.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("System Audio (loopback)") {
                     Picker("Loopback Input", selection: $model.state.loopbackInputUID) {
@@ -199,6 +230,7 @@ struct SettingsView: View {
         .onChange(of: model.state.micChannel) { Task { await model.restartEngine() } }
         .onChange(of: model.state.outputDeviceUID) { Task { await model.restartEngine() } }
         .onChange(of: model.state.sampleRate) { Task { await model.restartEngine() } }
+        .onChange(of: model.state.bufferFrames) { Task { await model.restartEngine() } }
         .alert("Reset to factory defaults?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive) { model.factoryReset() }
             Button("Cancel", role: .cancel) {}
@@ -219,12 +251,15 @@ struct CalibrationSettings: View {
             }
             Section("Measurement") {
                 Picker("Quick Positions", selection: $model.state.options.quickPositions) { ForEach([1, 3, 5, 7], id: \.self) { Text("\($0)").tag($0) } }
-                Picker("Full Positions", selection: $model.state.options.fullPositions) { ForEach([3, 5, 7, 9], id: \.self) { Text("\($0)").tag($0) } }
+                Picker("Full Positions (main area)", selection: $model.state.areas[0].positions) { ForEach([3, 5, 7, 9], id: \.self) { Text("\($0)").tag($0) } }
             }
             Section("Alignment") {
                 Picker("Gain Estimation", selection: $model.state.options.gainEstimation) { ForEach(CorrectionOptions.GainEstimation.allCases) { Text($0.rawValue).tag($0) } }
                 Picker("Delay Estimation", selection: $model.state.options.delayEstimation) { ForEach(CorrectionOptions.DelayEstimation.allCases) { Text($0.rawValue).tag($0) } }
                 Picker("Time-Align", selection: $model.state.options.timeAlign) { ForEach(CorrectionOptions.TimeAlign.allCases) { Text($0.rawValue).tag($0) } }
+                Picker("Phase Correction", selection: $model.state.options.phaseCorrection) { Text("Off").tag(false); Text("On").tag(true) }
+                Text("Phase Correction adds all-pass filters, so the subs and the tops stay in phase across the crossover. The calculation takes longer.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("Room Correction") {
                 Picker("Max Generations", selection: $model.state.options.generations) { ForEach(CorrectionOptions.Generations.allCases) { Text($0.label).tag($0) } }

@@ -158,6 +158,11 @@ cat version.txt
   has the key `uid#channel` in `SPLSettings.calibrations`. It is separate from the mic calibration file.
 - The Spectrum screen and the SPL screen share the RTA of the engine. `AppModel.engineBanding`
   holds the band width that the engine uses now.
+- The phase correction (`CorrectionOptions.phaseCorrection`) runs after the time alignment. It adds
+  the all-pass filters of `PhaseAligner.align` to the side whose phase leads. Then the sub fine
+  alignment runs again, because an all-pass changes the phase at the crossover.
+- `CalibrationSession.measurements` keeps the area index of each position. `ListeningArea.combine`
+  gives each area its weight, whatever its number of positions. The main area is first.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

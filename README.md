@@ -58,7 +58,11 @@ The Target Curve screen shows the selected preset or your custom curve.
   shows the last 10 s to 5 min as a color map.
 - **Calibrate:** A guided procedure measures each speaker at one or more mic positions. The app
   then calculates the crossover, the level, the delay, the polarity and up to 48 EQ filters for
-  each speaker.
+  each speaker. An optional phase correction adds all-pass filters at the crossover. The Complete
+  Measurement mode has a space plan with extra listening areas and a weight for each area.
+- **Diagnostics:** Cards explain boundary nulls with the wall distance, room modes, reflections,
+  weak measurements and uncorrected peaks. The cards show live on the Measure screen and on the
+  results page.
 - **Room analysis:** The app shows the impulse response and the energy-time curve (ETC) of a
   measurement. It lists the reflections in the first 100 ms with the delay, the level and the
   extra path length. It also lists the room modes from 15 Hz to 300 Hz with the frequency, the
@@ -194,7 +198,14 @@ The levels are in dBFS. The app does not know the absolute sound pressure level 
 2. Select **Quick Measurement** or **Complete Measurement**.
 3. Select a system template, and set the output channel of each speaker.
 4. Click **Start Measurement**, and follow the steps on the screen.
-5. On the results page, click **Apply to loopback**.
+5. On the results page, read the diagnostic cards, then click **Apply to loopback**.
+
+In **Complete Measurement**, set the size and the positions of the main area. Click **Add Listening
+Area** for each extra area, for example a sofa. Select a weight for each extra area. The app measures
+the areas one after the other and asks you to move the mic.
+
+To align the phase of the subs and the tops, open **Settings → Calibration**. Set **Phase
+Correction** to **On**, then click **Calculate Again**.
 
 ### Analyze the room
 
@@ -255,6 +266,12 @@ approximate and cover 30 Hz to 5 kHz only. If you use an iPhone as the mic over 
 **Mic Mode → Standard** in the menu bar. Voice Isolation removes steady noise and makes the
 measurement wrong.
 
+## Check the latency
+
+The latency drift check in **Settings → Audio → Diagnostics** measures the latency several times. A
+spread of more than 0.1 ms shows that the clocks of the mic and the speakers drift. The check
+writes a CSV file to the `diagnostics` folder next to the state file.
+
 ## Check the measurement chain
 
 A loop-through device sends its output back to its input. Examples are VB-Cable and BlackHole.
@@ -279,7 +296,9 @@ or `FAIL`.
   interfaces have separate clocks. An aggregate device can drift, so use one interface.
 - In the treble, the short window of the FTW treats late reflections as noise. The coherence there
   is then lower than with one long window.
-- The calibration does not include a phase correction pass or extra listening areas.
+- The time alignment uses the phase of the first position of the main area only.
+- The thresholds of the diagnostic cards come from synthetic tests. Check a card against your
+  room before you act on it.
 - The crossover is always a 4th-order Linkwitz-Riley filter.
 - The live impulse response is about 0.7 s long. Use a sweep for a decay longer than about 0.5 s.
   The sweep impulse response is 2 s long, so it cannot measure a decay longer than about 1.5 s.

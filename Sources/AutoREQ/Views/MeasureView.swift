@@ -19,6 +19,7 @@ struct MeasureView: View {
             toolbar
             ResponseChart(traces: traces, smoothing: model.state.smoothing, coherenceHide: model.state.coherenceHide.rawValue, scale: model.state.graphScale)
                 .padding(.horizontal)
+            liveDiagnostics
             snapshotList
         }
         .padding(.vertical)
@@ -66,6 +67,27 @@ struct MeasureView: View {
                 .popover(isPresented: $showSettings) { MeasurementSettings().padding().frame(width: 320) }
         }
         .padding(.horizontal)
+    }
+
+    @State private var showDiagnostics = true
+
+    /// The diagnostic cards of the live response or of the selected snapshot.
+    @ViewBuilder
+    private var liveDiagnostics: some View {
+        let sel = model.state.snapshots.first { model.selectedSnapshotIDs.contains($0.id) }
+        if let r = sel?.displayed ?? model.live {
+            let findings = Diagnostics.live(r, channel: sel?.name ?? "Live", range: 20...20_000)
+            DisclosureGroup(isExpanded: $showDiagnostics) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if findings.isEmpty { Text("No issues flagged.").foregroundStyle(.green) }
+                    ForEach(Array(findings.prefix(4).enumerated()), id: \.offset) { _, f in FindingCard(finding: f) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Text("Diagnostics — \(sel?.name ?? "live") (\(findings.count))").font(.headline)
+            }
+            .padding(.horizontal)
+        }
     }
 
     /// The plot time reference: an extra delay for the phase of the live traces.
