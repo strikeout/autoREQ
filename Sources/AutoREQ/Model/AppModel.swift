@@ -47,6 +47,16 @@ struct SpectrumSettings: Codable, Hashable {
     var ceilingDB = -20.0
 }
 
+/// The settings of the capture timer on the Measure screen.
+struct CaptureTimer: Codable, Hashable {
+    var intervalSeconds = 10.0
+    var count = 6
+    /// Adds one snapshot with the power average of all captures.
+    var average = true
+    /// Keeps each capture as a snapshot. Without it, only the average stays.
+    var keepEach = false
+}
+
 /// Everything the app saves between launches.
 struct PersistedState: Codable {
     var micDeviceUID: String?
@@ -75,6 +85,19 @@ struct PersistedState: Codable {
     var generatorStored: GeneratorPreset?
     var generatorPresetsStored: [GeneratorPreset]?
     var spectrumStored: SpectrumSettings?
+    var extraMicChannelsStored: [Int]?
+    var multiWindowStored: Bool?
+    var referenceSnapshotIDStored: UUID?
+    var liveDelayMsStored: Double?
+    var timerStored: CaptureTimer?
+
+    /// More mic channels of the mic device. Each one measures at the same time as the main mic.
+    var extraMicChannels: [Int] { get { extraMicChannelsStored ?? [] } set { extraMicChannelsStored = newValue } }
+    /// Frequency-dependent windows for the transfer function (FTW).
+    var multiWindow: Bool { get { multiWindowStored ?? true } set { multiWindowStored = newValue } }
+    /// The plot time reference of the live traces in ms. It changes only the displayed phase.
+    var liveDelayMs: Double { get { liveDelayMsStored ?? 0 } set { liveDelayMsStored = newValue } }
+    var timer: CaptureTimer { get { timerStored ?? CaptureTimer() } set { timerStored = newValue } }
 
     /// The generator setup of the Measure and Spectrum screens. The guided calibration always uses pink noise.
     var generator: GeneratorPreset {
@@ -105,7 +128,13 @@ final class AppModel {
     // Measurement
     private(set) var engine: MeasurementEngine?
     var engineError: String?
+    /// The live response of the main mic.
     var live: Response?
+    /// The live response of each mic channel, with its mic calibration removed.
+    var liveByChannel: [Int: Response] = [:]
+    /// The progress of the capture timer, for example (2, 6). Nil when the timer does not run.
+    var timerProgress: (done: Int, total: Int)?
+    private var timerTask: Task<Void, Never>?
     var micPeakDB = -140.0
     var micRMSDB = -140.0
     var status: MeasurementEngine.Status = .idle
@@ -207,7 +236,8 @@ final class AppModel {
         guard await requestMic() else { engineError = "Microphone access is off. Turn it on in System Settings → Privacy & Security → Microphone."; return false }
         guard let mic = micDevice, let out = outputDevice else { engineError = "Choose a measurement mic and a speaker output in Settings → Audio."; return false }
         do {
-            let e = try MeasurementEngine(outputDevice: out.id, inputDevice: mic.id, micChannel: state.micChannel, sampleRate: state.sampleRate, averaging: state.averaging)
+            let e = try MeasurementEngine(outputDevice: out.id, inputDevice: mic.id, micChannels: [state.micChannel] + state.extraMicChannels,
+                                          sampleRate: state.sampleRate, averaging: state.averaging, multiWindow: state.multiWindow)
             e.clockDriftCorrection = state.clockDrift
             e.onUpdate = { [weak self] u in
                 guard let self else { return }
@@ -215,7 +245,12 @@ final class AppModel {
                 self.micRMSDB = u.micRMSDB
                 self.status = u.status
                 self.stability = u.stability
-                if let r = u.response { self.live = self.activeMicCalibration.map(r.removing(mic:)) ?? r }
+                if !u.responses.isEmpty {
+                    self.liveByChannel = u.responses.reduce(into: [:]) { out, kv in
+                        out[kv.key] = self.micCalibration(for: kv.key).map(kv.value.removing(mic:)) ?? kv.value
+                    }
+                    self.live = self.liveByChannel[self.state.micChannel]
+                }
                 if self.spectrumRunning { self.receiveSpectrum(u) }
                 if self.autoCapturing && u.stability >= 1 {
                     self.autoCapturing = false
@@ -238,6 +273,8 @@ final class AppModel {
         noiseChannels = []
         playingSignal = nil
         spectrumRunning = false
+        liveByChannel = [:]
+        stopTimer()
         status = .idle
         live = nil
     }
@@ -253,7 +290,7 @@ final class AppModel {
     func setNoise(_ channels: Set<Int>, levelDBFS: Double = -20) {
         noiseChannels = channels
         playingSignal = channels.isEmpty ? nil : .pink
-        if channels.isEmpty { autoCapturing = false }
+        if channels.isEmpty { autoCapturing = false; stopTimer() }
         engine?.setNoise(channels: channels, levelDBFS: levelDBFS)
         if channels.isEmpty { status = .idle }
     }
@@ -387,19 +424,29 @@ final class AppModel {
 
     var allMicCalibrations: [MicCalibration] { MicCalibration.builtIn + state.micCalibrations }
 
-    /// The calibration of the current mic device, if one is chosen.
-    var activeMicCalibration: MicCalibration? {
-        guard let uid = state.micDeviceUID, let name = state.micCalibrationByDevice[uid] else { return nil }
+    /// The calibration of the main mic, if one is chosen.
+    var activeMicCalibration: MicCalibration? { micCalibration(for: state.micChannel) }
+
+    /// The key of a mic channel in `micCalibrationByDevice`. The main mic uses the device UID alone,
+    /// so a state file from an older version keeps its calibration.
+    private func calibrationKey(_ channel: Int) -> String? {
+        guard let uid = state.micDeviceUID else { return nil }
+        return channel == state.micChannel ? uid : "\(uid)#\(channel)"
+    }
+
+    /// The calibration of the mic on `channel`, if one is chosen.
+    func micCalibration(for channel: Int) -> MicCalibration? {
+        guard let key = calibrationKey(channel), let name = state.micCalibrationByDevice[key] else { return nil }
         return allMicCalibrations.first { $0.name == name }
     }
 
-    func selectMicCalibration(_ name: String?) {
-        guard let uid = state.micDeviceUID else { return }
-        state.micCalibrationByDevice[uid] = name
+    func selectMicCalibration(_ name: String?, channel: Int? = nil) {
+        guard let key = calibrationKey(channel ?? state.micChannel) else { return }
+        state.micCalibrationByDevice[key] = name
     }
 
     /// Imports REW / miniDSP calibration files and selects the last one for the current mic.
-    func importMicCalibration() {
+    func importMicCalibration(channel: Int? = nil) {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.message = "Choose a mic calibration file, for example the file from miniDSP for your mic's serial number."
@@ -411,7 +458,7 @@ final class AppModel {
             else { engineError = "\(url.lastPathComponent) is not a calibration file this app can read."; continue }
             state.micCalibrations.removeAll { $0.name == cal.name }
             state.micCalibrations.append(cal)
-            selectMicCalibration(cal.name)
+            selectMicCalibration(cal.name, channel: channel)
         }
     }
 
@@ -422,10 +469,68 @@ final class AppModel {
 
     // MARK: Snapshots
 
-    func takeSnapshot(name: String? = nil, speakerID: UUID? = nil) {
-        guard let r = live else { return }
-        let n = state.snapshots.count
-        state.snapshots.append(Snapshot(name: name ?? "Snapshot \(n + 1)", colorHex: Self.palette[n % Self.palette.count], response: r, speakerID: speakerID))
+    /// Keeps the live response of each mic as a snapshot. The snapshot gets the live plot time reference as its delay offset.
+    /// Returns the new snapshots.
+    @discardableResult
+    func takeSnapshot(name: String? = nil, speakerID: UUID? = nil) -> [Snapshot] {
+        let chans = [state.micChannel] + state.extraMicChannels.filter { liveByChannel[$0] != nil }
+        let base = name ?? "Snapshot \(state.snapshots.count + 1)"
+        var added: [Snapshot] = []
+        for c in chans {
+            guard let r = liveByChannel[c] ?? (c == state.micChannel ? live : nil) else { continue }
+            let n = state.snapshots.count
+            var s = Snapshot(name: chans.count > 1 ? "\(base) · Ch \(c + 1)" : base, colorHex: Self.palette[n % Self.palette.count], response: r, speakerID: speakerID)
+            s.offsetDelayMs = state.liveDelayMs
+            state.snapshots.append(s)
+            added.append(s)
+        }
+        return added
+    }
+
+    /// The reference snapshot. The Measure screen shows every other trace relative to it.
+    var referenceSnapshot: Snapshot? {
+        guard let id = state.referenceSnapshotIDStored else { return nil }
+        return state.snapshots.first { $0.id == id }
+    }
+
+    // MARK: Capture timer
+
+    /// Takes a snapshot at the interval of `state.timer`. The generator must play.
+    func startTimer() {
+        stopTimer()
+        let t = state.timer
+        timerProgress = (0, t.count)
+        timerTask = Task {
+            var captured: [Snapshot] = []
+            for k in 1...max(1, t.count) {
+                try? await Task.sleep(for: .seconds(t.intervalSeconds))
+                guard !Task.isCancelled, live != nil, !noiseChannels.isEmpty else { break }
+                captured += takeSnapshot(name: "Timer \(k)/\(t.count)")
+                timerProgress = (k, t.count)
+            }
+            if t.average, captured.count > 1 {
+                // One average for each mic channel. The names end in "· Ch n" when there are several mics.
+                let groups = Dictionary(grouping: captured) { $0.name.components(separatedBy: " · ").dropFirst().first ?? "" }
+                for (ch, items) in groups.sorted(by: { $0.key < $1.key }) {
+                    guard let avg = Response.powerAverage(items.map(\.response)) else { continue }
+                    let n = state.snapshots.count
+                    var s = Snapshot(name: "Timer average" + (ch.isEmpty ? "" : " · \(ch)"), colorHex: Self.palette[n % Self.palette.count], response: avg)
+                    s.offsetDelayMs = items[0].offsetDelayMs
+                    state.snapshots.append(s)
+                }
+            }
+            if !t.keepEach && t.average && captured.count > 1 {
+                let ids = Set(captured.map(\.id))
+                state.snapshots.removeAll { ids.contains($0.id) }
+            }
+            timerProgress = nil
+        }
+    }
+
+    func stopTimer() {
+        timerTask?.cancel()
+        timerTask = nil
+        timerProgress = nil
     }
 
     func combineSelected() {

@@ -3,15 +3,19 @@ import CoreAudio
 import Foundation
 import Synchronization
 
-/// Plays the generator signal on chosen output channels and measures the transfer function to the microphone.
-/// It also gives the spectrum of chosen input channels for the RTA and the spectrograph.
+/// Plays the generator signal on chosen output channels and measures the transfer function to one
+/// or more mic channels. It also gives the spectrum of chosen input channels for the RTA.
 ///
 /// The output and the input run on two engines. Each engine writes its samples to a ring with an
-/// absolute counter. GCC-PHAT finds the offset between the two counters. The offset stays constant
-/// while both engines run, so arrival times of different speakers are comparable within one session.
+/// absolute counter. GCC-PHAT finds the offset between the two counters for each mic. The offset
+/// stays constant while both engines run, so arrival times of different speakers are comparable
+/// within one session.
 final class MeasurementEngine: @unchecked Sendable {
     struct Update {
+        /// The response of the first mic channel.
         var response: Response?
+        /// The response of each mic channel, keyed by the zero-based input channel.
+        var responses: [Int: Response] = [:]
         var micPeakDB: Double
         var micRMSDB: Double
         var status: Status
@@ -36,12 +40,42 @@ final class MeasurementEngine: @unchecked Sendable {
         }
     }
 
+    /// The analysis state of one mic channel. The analysis queue owns it.
+    private final class Mic {
+        let channel: Int
+        let ring: SampleRing
+        var analyzer: WindowedTransferAnalyzer
+        let impulse: ImpulseAnalyzer
+        var lastImpulse: ImpulseResponse?
+        /// The reference index minus the mic index of the same sound.
+        var offset: Int?
+        var failedSearches = 0
+        var tracker = DelayTracker()
+
+        init(channel: Int, ring: SampleRing, sampleRate: Double, averaging: Averaging, multiWindow: Bool) {
+            self.channel = channel
+            self.ring = ring
+            analyzer = WindowedTransferAnalyzer(sampleRate: sampleRate, averaging: averaging, multiWindow: multiWindow)
+            impulse = ImpulseAnalyzer(sampleRate: sampleRate)
+        }
+
+        func reset(periodic: Bool) {
+            analyzer.reset()
+            impulse.reset()
+            impulse.periodic = periodic
+            lastImpulse = nil
+        }
+    }
+
     let sampleRate: Double
+    /// The mic channels. The first is the main mic: the level meter, the status and Auto Capture use it.
+    let micChannels: [Int]
     private let output: OutputStream
     private let input: InputStream
     private let refRing = SampleRing(capacityPowerOfTwo: 1 << 20)
     private let micRing = SampleRing(capacityPowerOfTwo: 1 << 20)
     /// One ring for each of the first `maxSpectrumChannels` input channels.
+    /// The rings hold more than the longest analysis frame at 96 kHz.
     private let inputRings: [SampleRing]
     static let maxSpectrumChannels = 8
     /// Atomics cannot be copied into a closure, so the render closures share this box.
@@ -61,30 +95,32 @@ final class MeasurementEngine: @unchecked Sendable {
     private var timer: DispatchSourceTimer?
 
     // State owned by `queue`.
-    private let analyzer: TransferAnalyzer
-    private let impulseAnalyzer: ImpulseAnalyzer
-    private var lastImpulse: ImpulseResponse?
+    private var mics: [Mic]
+    private var averaging: Averaging
+    private var multiWindow: Bool
     private var ticks = 0
-    private var refOffset: Int?
-    private var lastDelaySearch = Date.distantPast
+    private var lastRefCount = 0
     private var noiseStartCount = 0
     private var history: [Double] = []
     private var stableFrames = 0
-    private var failedSearches = 0
     private var periodicSignal = false
     private var tonalSignal = false
     private var spectrumChannels: [Int] = []
     private var spectrumAnalyzers: [Int: SpectrumAnalyzer] = [:]
     private var banding = Banding.oct3
     private var spectrumAveraging = Averaging.fast
+    /// Follows the delay of each mic from its impulse response. This also removes clock drift.
     var clockDriftCorrection = false
     var onUpdate: ((Update) -> Void)?
 
-    init(outputDevice: AudioDeviceID, inputDevice: AudioDeviceID, micChannel: Int, sampleRate: Double, averaging: Averaging) throws {
+    /// - Parameter micChannels: The zero-based input channels of the mics. The first is the main mic.
+    ///   Extra mics must be among the first `maxSpectrumChannels` channels.
+    init(outputDevice: AudioDeviceID, inputDevice: AudioDeviceID, micChannels: [Int], sampleRate: Double, averaging: Averaging, multiWindow: Bool = true) throws {
         AudioDevice.setSampleRate(sampleRate, for: outputDevice)
         AudioDevice.setSampleRate(sampleRate, for: inputDevice)
+        let main = micChannels.first ?? 0
         shared = Shared(SignalGenerator(.pink, sampleRate: sampleRate))
-        inputRings = (0..<Self.maxSpectrumChannels).map { _ in SampleRing(capacityPowerOfTwo: 1 << 16) }
+        inputRings = (0..<Self.maxSpectrumChannels).map { _ in SampleRing(capacityPowerOfTwo: 1 << 18) }
         let sh = shared, ref = refRing, mic = micRing, rings = inputRings
         let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 8192)
         output = try OutputStream(device: outputDevice) { chans, frames in
@@ -106,7 +142,7 @@ final class MeasurementEngine: @unchecked Sendable {
                 for (i, ring) in rings.enumerated() where i < chans.count {
                     if let p = chans[i].mData?.assumingMemoryBound(to: Float.self) { ring.write(p, frames) }
                 }
-                let c = min(micChannel, chans.count - 1)
+                let c = min(main, chans.count - 1)
                 guard c >= 0, let p = chans[c].mData?.assumingMemoryBound(to: Float.self) else { return }
                 mic.write(p, frames)
                 var pk = Float(bitPattern: sh.micPeak.load(ordering: .relaxed))
@@ -122,10 +158,16 @@ final class MeasurementEngine: @unchecked Sendable {
             throw NSError(domain: "AutoREQ", code: 2, userInfo: [NSLocalizedDescriptionKey:
                 "The mic runs at \(Int(input.sampleRate)) Hz and the output at \(Int(output.sampleRate)) Hz. Set both devices to the same rate in Audio MIDI Setup."])
         }
-        self.sampleRate = output.sampleRate
-        analyzer = TransferAnalyzer(fftSize: 16_384, sampleRate: output.sampleRate, averaging: averaging)
-        analyzer.frameInterval = 0.1
-        impulseAnalyzer = ImpulseAnalyzer(sampleRate: output.sampleRate)
+        let rate = output.sampleRate
+        self.sampleRate = rate
+        self.averaging = averaging
+        self.multiWindow = multiWindow
+        let inCount = input.channelCount, limit = Self.maxSpectrumChannels
+        let extras = Array(micChannels.dropFirst().filter { $0 != main && $0 < limit && $0 < inCount })
+        self.micChannels = [main] + extras
+        var list = [Mic(channel: main, ring: mic, sampleRate: rate, averaging: averaging, multiWindow: multiWindow)]
+        for c in extras { list.append(Mic(channel: c, ring: rings[c], sampleRate: rate, averaging: averaging, multiWindow: multiWindow)) }
+        mics = list
         let t = DispatchSource.makeTimerSource(queue: queue)
         t.schedule(deadline: .now() + 0.1, repeating: 0.1)
         t.setEventHandler { [weak self] in self?.tick() }
@@ -155,7 +197,8 @@ final class MeasurementEngine: @unchecked Sendable {
         if changed {
             signal = new
             // Make the generator here: the periodic noise and a file need a table.
-            let g = SignalGenerator(new, sampleRate: sampleRate, periodLength: impulseAnalyzer.fftSize, fileSamples: fileSamples)
+            let period = ImpulseAnalyzer.frameLength(sampleRate: sampleRate)
+            let g = SignalGenerator(new, sampleRate: sampleRate, periodLength: period, fileSamples: fileSamples)
             shared.generator.withLock { $0 = g }
         }
         setLevel(levelDBFS)
@@ -191,66 +234,87 @@ final class MeasurementEngine: @unchecked Sendable {
 
     func resetSpectrum() { queue.async { for a in self.spectrumAnalyzers.values { a.reset() } } }
 
-    func setAveraging(_ a: Averaging) { queue.async { self.analyzer.averaging = a } }
+    func setAveraging(_ a: Averaging) { queue.async { self.averaging = a; for m in self.mics { m.analyzer.averaging = a } } }
 
-    /// Clears the averages. The delay stays, because it does not change while the engines run.
-    func resetAverages() { queue.async { self.resetAnalyzers(); self.history = []; self.stableFrames = 0 } }
-
-    private func resetAnalyzers() {
-        analyzer.reset()
-        impulseAnalyzer.reset()
-        impulseAnalyzer.periodic = periodicSignal
-        lastImpulse = nil
+    /// Turns the frequency-dependent windows on or off. The averages restart, and the delays stay.
+    func setMultiWindow(_ on: Bool) {
+        queue.async {
+            self.multiWindow = on
+            for m in self.mics { m.analyzer = WindowedTransferAnalyzer(sampleRate: self.sampleRate, averaging: self.averaging, multiWindow: on) }
+            self.history = []; self.stableFrames = 0
+        }
     }
 
+    /// Clears the averages. The delays stay, because they do not change while the engines run.
+    func resetAverages() { queue.async { for m in self.mics { m.reset(periodic: self.periodicSignal) }; self.history = []; self.stableFrames = 0 } }
+
     private func restart() {
-        resetAnalyzers()
+        for m in mics {
+            m.reset(periodic: periodicSignal)
+            m.offset = nil
+            m.failedSearches = 0
+            m.tracker = DelayTracker()
+        }
         history = []
         stableFrames = 0
-        failedSearches = 0
         noiseStartCount = refRing.count
-        refOffset = nil
     }
 
     private func tick() {
         let pk = Float(bitPattern: shared.micPeak.exchange(0, ordering: .relaxed))
-        let mc = micRing.count
-        let rmsWindow = micRing.read(from: mc - 4800, count: 4800) ?? []
+        let rmsWindow = micRing.read(from: micRing.count - 4800, count: 4800) ?? []
         let rms = rmsWindow.isEmpty ? 0 : (rmsWindow.reduce(0) { $0 + $1 * $1 } / Float(rmsWindow.count)).squareRoot()
         var update = Update(response: nil, micPeakDB: 20 * log10(max(Double(pk), 1e-7)), micRMSDB: 20 * log10(max(Double(rms), 1e-7)), status: .idle, stability: 0)
         defer { let u = update; DispatchQueue.main.async { self.onUpdate?(u) } }
         analyzeSpectrum(&update)
+        let rc = refRing.count
+        let newSamples = max(0, rc - lastRefCount)
+        lastRefCount = rc
 
         guard shared.noiseMask.load(ordering: .relaxed) != 0 else { return }
         guard !tonalSignal else { update.status = .tone; return }
-        let n = analyzer.fftSize
-        let playedSamples = refRing.count - noiseStartCount
-        if refOffset == nil || (clockDriftCorrection && Date().timeIntervalSince(lastDelaySearch) > 3) {
-            update.status = refOffset == nil ? (failedSearches > 6 ? .noDelay : .findingDelay) : .measuring
-            guard playedSamples > Int(sampleRate * 0.8) else { return }
-            findDelay()
-            if refOffset == nil { return }
-        }
-        guard let off = refOffset,
-              let mic = micRing.read(from: mc - n, count: n),
-              let ref = refRing.read(from: mc - n + off, count: n)
-        else { update.status = .findingDelay; return }
-        analyzer.add(reference: ref, measured: mic)
-        // The impulse frame is longer than 1.2 s, so a new frame every 0.5 s is enough.
         ticks += 1
-        let ni = impulseAnalyzer.fftSize
-        if ticks % 5 == 0,
-           let micLong = micRing.read(from: mc - ni, count: ni),
-           let refLong = refRing.read(from: mc - ni + off, count: ni) {
-            impulseAnalyzer.add(reference: refLong, measured: micLong)
-            lastImpulse = impulseAnalyzer.impulse()
+        let playedSamples = rc - noiseStartCount
+        for (k, mic) in mics.enumerated() {
+            if mic.offset == nil {
+                if k == 0 { update.status = mic.failedSearches > 6 ? .noDelay : .findingDelay }
+                guard playedSamples > Int(sampleRate * 0.8) else { continue }
+                findDelay(mic)
+                if mic.offset == nil { continue }
+            }
+            guard let off = mic.offset else { continue }
+            let mc = mic.ring.count, n = mic.analyzer.frameLength
+            guard let y = mic.ring.read(from: mc - n, count: n), let x = refRing.read(from: mc - n + off, count: n) else {
+                if k == 0 { update.status = .findingDelay }
+                continue
+            }
+            mic.analyzer.add(reference: x, measured: y, newSamples: min(newSamples, n), interval: 0.1)
+            // The impulse frame is longer than 1.2 s, so a new frame every 0.5 s is enough.
+            let ni = mic.impulse.fftSize
+            if ticks % 5 == 0, let yl = mic.ring.read(from: mc - ni, count: ni), let xl = refRing.read(from: mc - ni + off, count: ni) {
+                mic.impulse.add(reference: xl, measured: yl)
+                mic.lastImpulse = mic.impulse.impulse()
+                if clockDriftCorrection, let d = mic.tracker.update(lag: mic.impulse.latestPeakLag()) {
+                    // The mic hears the sound d samples later than before, so the reference moves back by d.
+                    mic.offset = off - d
+                    mic.reset(periodic: periodicSignal)
+                    if k == 0 { history = []; stableFrames = 0 }
+                    continue
+                }
+            }
+            var r = mic.analyzer.response(latencySamples: -off)
+            r.impulse = mic.lastImpulse
+            update.responses[mic.channel] = r
+            if k == 0 {
+                update.response = r
+                update.status = .measuring
+                updateStability(r, &update)
+            }
         }
-        var r = analyzer.response(latencySamples: -off)
-        r.impulse = lastImpulse
-        update.response = r
-        update.status = .measuring
+    }
 
-        // Stability: the mean level in 100 Hz–10 kHz changes little, and the coherence is fair.
+    /// Stability: the mean level in 100 Hz–10 kHz changes little, and the coherence is fair.
+    private func updateStability(_ r: Response, _ update: inout Update) {
         let lo = FrequencyGrid.index(of: 100), hi = FrequencyGrid.index(of: 10_000)
         let mean = r.magnitudeDB[lo...hi].reduce(0, +) / Double(hi - lo + 1)
         let coh = r.coherence[lo...hi].reduce(0, +) / Double(hi - lo + 1)
@@ -271,18 +335,16 @@ final class MeasurementEngine: @unchecked Sendable {
         }
     }
 
-    private func findDelay() {
-        lastDelaySearch = Date()
+    private func findDelay(_ mic: Mic) {
         // Periodic noise matches at every period. A search range shorter than one period keeps the match unique.
         let mLen = 1 << 15, rLen = periodicSignal ? mLen + (1 << 15) : 1 << 17
-        let mc = micRing.count, rc = refRing.count
-        guard let mic = micRing.read(from: mc - mLen, count: mLen),
-              let ref = refRing.read(from: rc - rLen, count: rLen),
-              let hit = DelayFinder.find(reference: ref, measured: mic)
-        else { failedSearches += 1; return }
-        guard hit.quality > 6 else { failedSearches += 1; return }
-        let newOffset = (rc - rLen + hit.lag) - (mc - mLen)
-        if let old = refOffset, old != newOffset { resetAnalyzers() }
-        refOffset = newOffset
+        let mc = mic.ring.count, rc = refRing.count
+        guard let m = mic.ring.read(from: mc - mLen, count: mLen),
+              let r = refRing.read(from: rc - rLen, count: rLen),
+              let hit = DelayFinder.find(reference: r, measured: m),
+              hit.quality > 6
+        else { mic.failedSearches += 1; return }
+        mic.offset = (rc - rLen + hit.lag) - (mc - mLen)
+        mic.reset(periodic: periodicSignal)
     }
 }

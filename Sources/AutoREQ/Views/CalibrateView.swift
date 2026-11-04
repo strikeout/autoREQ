@@ -218,7 +218,9 @@ struct MeasureStage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Measure — position \(session.position + 1) of \(session.positions)").font(.title2.bold())
+            Text(session.micCount > 1
+                 ? "Measure — round \(session.position + 1) of \(session.rounds) (\(session.micCount) mics)"
+                 : "Measure — position \(session.position + 1) of \(session.positions)").font(.title2.bold())
             Text(session.measureMessage).foregroundStyle(.secondary)
             if let live = model.live, session.currentSpeaker != nil {
                 ProgressView(value: model.stability) { Text("Confidence").font(.caption) }

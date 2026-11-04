@@ -42,6 +42,10 @@ The Target Curve screen shows the selected preset or your custom curve.
 - **Measure:** The app plays a test signal and shows the transfer function of the speaker. The
   chart shows the magnitude, the phase and the coherence. You can keep snapshots and compare them.
   You can also export a snapshot to CSV and import a CSV again.
+- **Transfer function tools:** The transfer function uses long windows in the bass and short
+  windows in the treble (FTW). Up to 8 mics of one interface measure at the same time. The delay
+  tracker follows the delay when the mic moves. A reference snapshot, a phase delay and a capture
+  timer are also available.
 - **Generator:** The generator plays pink noise, white noise or periodic pink noise. It also plays
   a sine tone, a dual sine or an audio file. The level is an RMS level in dBFS. Presets keep the signal, the
   level and the output channel.
@@ -127,6 +131,28 @@ open -W build/AutoREQ.app --args --screenshots "$PWD/docs/screenshots"
 3. Click **Start**.
 4. Wait until the status shows "OK — Measuring".
 5. Click **Take Snapshot**, or use **Auto Capture**. Auto Capture stops when the reading is stable.
+
+### Compare and repeat measurements
+
+- Click the star of a snapshot to make it the reference. The chart then shows every other trace
+  relative to the reference. Click the star again to remove the reference.
+- Set **Phase delay** to move the time reference of the live phase. **Find** sets it to the peak
+  of the impulse response, so the phase of the direct sound is flat. A new snapshot keeps the
+  phase delay as its delay offset.
+- Click **Timer** to take a snapshot at a set interval. The timer can add the average of all
+  captures as one snapshot.
+- In the settings of the Measure screen, **Track Delay** follows the delay of each mic. Turn it on
+  when you move the mic during a measurement.
+
+### Use several mics
+
+1. Connect the mics to one audio interface.
+2. Open **Settings → Audio → Extra Mics**, and turn on the input channel of each extra mic.
+3. Select a calibration file for each extra mic.
+
+The Measure screen shows one live trace for each mic. **Take Snapshot** keeps one snapshot for each
+mic. In the guided calibration, each mic counts as one position. Three mics and 3 positions then
+need one round only.
 
 ### Select a test signal
 
@@ -217,6 +243,10 @@ or `FAIL`.
   the measurement and the correction are wrong in the treble.
 - The loopback path does not correct clock drift between two devices. The app resets the read
   position when the drift becomes too large, and this can make a click.
+- The extra mics must be on the first 8 input channels of the mic device. Mics on different
+  interfaces have separate clocks. An aggregate device can drift, so use one interface.
+- In the treble, the short window of the FTW treats late reflections as noise. The coherence there
+  is then lower than with one long window.
 - The calibration does not include a phase correction pass or extra listening areas.
 - The crossover is always a 4th-order Linkwitz-Riley filter.
 - The impulse response is about 0.7 s long. The analysis cannot measure a decay longer than

@@ -79,6 +79,9 @@ Effort: medium. Risk: low.
 
 ## Phase 2 — v1.3.0: Better transfer functions
 
+Status: done in v1.3.0. The app shows a warning for an aggregate device. It does not make an
+aggregate device itself.
+
 1. **Several mics at the same time.** Change `MeasurementEngine` from one mic channel to a list of
    channels. Each channel gets its own transfer function. The Complete Measurement mode can then
    measure several positions at the same time.
