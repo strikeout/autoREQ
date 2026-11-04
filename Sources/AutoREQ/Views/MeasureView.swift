@@ -19,6 +19,7 @@ struct MeasureView: View {
             toolbar
             ResponseChart(traces: traces, smoothing: model.state.smoothing, coherenceHide: model.state.coherenceHide.rawValue, scale: model.state.graphScale)
                 .padding(.horizontal)
+            liveDiagnostics
             snapshotList
         }
         .padding(.vertical)
@@ -31,7 +32,7 @@ struct MeasureView: View {
         let ref = model.referenceSnapshot?.displayed
         func relative(_ r: Response) -> Response { ref.map(r.dividing(by:)) ?? r }
         if model.engine != nil {
-            let chans = [model.state.micChannel] + model.state.extraMicChannels
+            let chans = model.micChannels
             for (k, c) in chans.enumerated() {
                 guard let r = model.liveByChannel[c] ?? (k == 0 ? model.live : nil) else { continue }
                 let shown = r.offset(delayMs: model.state.liveDelayMs, gainDB: 0, inverted: false)
@@ -68,6 +69,27 @@ struct MeasureView: View {
         .padding(.horizontal)
     }
 
+    @State private var showDiagnostics = true
+
+    /// The diagnostic cards of the live response or of the selected snapshot.
+    @ViewBuilder
+    private var liveDiagnostics: some View {
+        let sel = model.state.snapshots.first { model.selectedSnapshotIDs.contains($0.id) }
+        if let r = sel?.displayed ?? model.live {
+            let findings = Diagnostics.live(r, channel: sel?.name ?? "Live", range: 20...20_000)
+            DisclosureGroup(isExpanded: $showDiagnostics) {
+                VStack(alignment: .leading, spacing: 8) {
+                    if findings.isEmpty { Text("No issues flagged.").foregroundStyle(.green) }
+                    ForEach(Array(findings.prefix(4).enumerated()), id: \.offset) { _, f in FindingCard(finding: f) }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } label: {
+                Text("Diagnostics — \(sel?.name ?? "live") (\(findings.count))").font(.headline)
+            }
+            .padding(.horizontal)
+        }
+    }
+
     /// The plot time reference: an extra delay for the phase of the live traces.
     private var delayControl: some View {
         HStack(spacing: 2) {
@@ -75,7 +97,8 @@ struct MeasureView: View {
             Button("−") { model.state.liveDelayMs -= delayStep }.buttonStyle(.borderless)
             Text(String(format: "%.3f ms", model.state.liveDelayMs)).monospacedDigit().frame(width: 72)
             Button("+") { model.state.liveDelayMs += delayStep }.buttonStyle(.borderless)
-            Button("Find") { if let t = model.live?.impulse?.peakTimeMs { model.state.liveDelayMs = t } }
+            // A peak at +t ms means a phase of -360·f·t, so a delay offset of -t ms flattens it.
+            Button("Find") { if let t = model.live?.impulse?.peakTimeMs { model.state.liveDelayMs = -t } }
                 .buttonStyle(.borderless).disabled(model.live?.impulse == nil)
                 .help("Sets the phase delay to the peak of the impulse response, so the phase of the direct sound is flat.")
             Button("↩") { model.state.liveDelayMs = 0 }.buttonStyle(.borderless)

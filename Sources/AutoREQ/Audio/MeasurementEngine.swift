@@ -25,6 +25,8 @@ final class MeasurementEngine: @unchecked Sendable {
         var spectrum: [Int: [Double]] = [:]
         /// The 1/24-octave levels of the last frame of the first spectrum channel.
         var spectrogramFrame: [Float]?
+        /// The sound levels of each SPL channel.
+        var soundLevels: [Int: SoundLevels] = [:]
     }
 
     enum Status: Equatable {
@@ -73,7 +75,8 @@ final class MeasurementEngine: @unchecked Sendable {
     private let output: OutputStream
     private let input: InputStream
     private let refRing = SampleRing(capacityPowerOfTwo: 1 << 20)
-    private let micRing = SampleRing(capacityPowerOfTwo: 1 << 20)
+    /// The main mic ring holds one sweep period of 10 s + 2 s at the sample rate.
+    private let micRing: SampleRing
     /// One ring for each of the first `maxSpectrumChannels` input channels.
     /// The rings hold more than the longest analysis frame at 96 kHz.
     private let inputRings: [SampleRing]
@@ -83,6 +86,8 @@ final class MeasurementEngine: @unchecked Sendable {
         let noiseMask = Atomic<UInt64>(0)
         let noiseGain = Atomic<UInt32>(Float(0.1).bitPattern)
         let micPeak = Atomic<UInt32>(0)
+        /// The reference index of the last table start (a sweep start), or -1.
+        let periodStart = Atomic<Int>(-1)
         /// The render thread only tries the lock. If the main thread holds it to swap the signal,
         /// the render thread plays silence for one buffer.
         let generator: Mutex<SignalGenerator>
@@ -104,11 +109,15 @@ final class MeasurementEngine: @unchecked Sendable {
     private var history: [Double] = []
     private var stableFrames = 0
     private var periodicSignal = false
+    /// The period of a repeating table (periodic pink, sweep or file), or nil for a random signal.
+    private var signalPeriod: Int?
     private var tonalSignal = false
     private var spectrumChannels: [Int] = []
     private var spectrumAnalyzers: [Int: SpectrumAnalyzer] = [:]
     private var banding = Banding.oct3
     private var spectrumAveraging = Averaging.fast
+    private var meters: [Int: SoundLevelMeter] = [:]
+    private var meterRead: [Int: Int] = [:]
     /// Follows the delay of each mic from its impulse response. This also removes clock drift.
     var clockDriftCorrection = false
     var onUpdate: ((Update) -> Void)?
@@ -120,17 +129,24 @@ final class MeasurementEngine: @unchecked Sendable {
         AudioDevice.setSampleRate(sampleRate, for: inputDevice)
         let main = micChannels.first ?? 0
         shared = Shared(SignalGenerator(.pink, sampleRate: sampleRate))
-        inputRings = (0..<Self.maxSpectrumChannels).map { _ in SampleRing(capacityPowerOfTwo: 1 << 18) }
+        // An extra mic ring holds a sweep period, like the main ring. A ring for the RTA or the SPL meter holds 1.3 s at 192 kHz.
+        var long = 1 << 18
+        while Double(long) < 12.5 * sampleRate { long <<= 1 }
+        micRing = SampleRing(capacityPowerOfTwo: long)
+        let extraSet = Set(micChannels.dropFirst())
+        inputRings = (0..<Self.maxSpectrumChannels).map { SampleRing(capacityPowerOfTwo: extraSet.contains($0) ? long : 1 << 18) }
         let sh = shared, ref = refRing, mic = micRing, rings = inputRings
         let scratch = UnsafeMutablePointer<Float>.allocate(capacity: 8192)
         output = try OutputStream(device: outputDevice) { chans, frames in
             let m = sh.noiseMask.load(ordering: .relaxed)
             let g = Float(bitPattern: sh.noiseGain.load(ordering: .relaxed))
             let n = min(frames, 8192)
-            if m == 0 || sh.generator.withLockIfAvailable({ $0.render(scratch, n) }) == nil {
-                for i in 0..<n { scratch[i] = 0 }
-            }
-            for i in 0..<n { scratch[i] *= g }
+            let before = ref.count
+            let wrap = m == 0 ? nil : sh.generator.withLockIfAvailable { g -> Int? in g.render(scratch, n); return g.lastWrap }
+            if wrap == nil { for i in 0..<n { scratch[i] = 0 } }
+            if let w = wrap ?? nil { sh.periodStart.store(before + w, ordering: .relaxed) }
+            // The clip keeps the reference equal to the output, so the transfer function stays correct.
+            for i in 0..<n { scratch[i] = max(-1, min(1, scratch[i] * g)) }
             ref.write(scratch, n)
             for (c, buf) in chans.enumerated() {
                 guard let p = buf.mData?.assumingMemoryBound(to: Float.self) else { continue }
@@ -206,13 +222,19 @@ final class MeasurementEngine: @unchecked Sendable {
         let old = shared.noiseMask.exchange(m, ordering: .relaxed)
         if old != m || changed {
             let periodic = new.kind == .periodicPink, tonal = new.kind.isTonal
-            queue.async { self.periodicSignal = periodic; self.tonalSignal = tonal; self.restart() }
+            let period: Int? = switch new.kind {
+            case .periodicPink: ImpulseAnalyzer.frameLength(sampleRate: sampleRate)
+            case .logSweep: SignalGenerator.sweepTable(seconds: new.sweepSeconds ?? 2, sampleRate: sampleRate).count
+            case .file: fileSamples.isEmpty ? nil : fileSamples.count
+            default: nil
+            }
+            queue.async { self.periodicSignal = periodic; self.signalPeriod = period; self.tonalSignal = tonal; self.restart() }
         }
     }
 
     /// Changes the level of the playing signal. The analysis continues.
     func setLevel(_ levelDBFS: Double) {
-        shared.noiseGain.store(Float(pow(10, levelDBFS / 20)).bitPattern, ordering: .relaxed)
+        shared.noiseGain.store(Float(pow(10, min(levelDBFS, 0) / 20)).bitPattern, ordering: .relaxed)
     }
 
     /// Analyzes the spectrum of the input `channels` (zero-based). An empty list stops the spectrum analysis.
@@ -234,6 +256,31 @@ final class MeasurementEngine: @unchecked Sendable {
 
     func resetSpectrum() { queue.async { for a in self.spectrumAnalyzers.values { a.reset() } } }
 
+    /// Runs one sound level meter for each input channel in `calibrations` (channel → dB SPL offset).
+    /// A channel that already has a meter keeps its values. An empty set stops the meters.
+    func setSoundLevel(calibrations: [Int: Double]) {
+        let cal = calibrations.filter { $0.key < Self.maxSpectrumChannels }
+        queue.async {
+            self.meters = self.meters.filter { cal[$0.key] != nil }
+            self.meterRead = self.meterRead.filter { cal[$0.key] != nil }
+            for (c, db) in cal {
+                if let m = self.meters[c] { m.calibrationDB = db } else { self.meters[c] = SoundLevelMeter(sampleRate: self.sampleRate, calibrationDB: db) }
+            }
+        }
+    }
+
+    /// Clears the Leq, the maxima, the peaks and the doses of all meters.
+    func resetSoundLevel() { queue.async { for m in self.meters.values { m.reset() } } }
+
+    /// The RMS level in dBFS of the last `seconds` of an input channel, for the calibrator.
+    func rmsDBFS(channel: Int, seconds: Double) -> Double? {
+        guard channel < Self.maxSpectrumChannels else { return nil }
+        let ring = inputRings[channel], n = min(Int(seconds * sampleRate), ring.capacity - 1)
+        guard let x = ring.read(from: ring.count - n, count: n) else { return nil }
+        let ms = x.reduce(0.0) { $0 + Double($1) * Double($1) } / Double(n)
+        return 10 * log10(max(ms, 1e-20))
+    }
+
     func setAveraging(_ a: Averaging) { queue.async { self.averaging = a; for m in self.mics { m.analyzer.averaging = a } } }
 
     /// Turns the frequency-dependent windows on or off. The averages restart, and the delays stay.
@@ -247,6 +294,28 @@ final class MeasurementEngine: @unchecked Sendable {
 
     /// Clears the averages. The delays stay, because they do not change while the engines run.
     func resetAverages() { queue.async { for m in self.mics { m.reset(periodic: self.periodicSignal) }; self.history = []; self.stableFrames = 0 } }
+
+    /// The reference index of the last table start, or -1. The sweep measurement reads it.
+    var periodStart: Int { shared.periodStart.load(ordering: .relaxed) }
+
+    /// The mic samples of the last complete period of the table (for example one sweep and its tail).
+    /// Each array starts at the first sample of the sweep, with the delay of its mic removed.
+    /// `start` identifies the period. It returns nil before the engine knows the delays.
+    func lastPeriod(length: Int) -> (start: Int, offsets: [Int: Int], data: [Int: [Float]])? {
+        queue.sync {
+            let s = shared.periodStart.load(ordering: .relaxed)
+            guard s >= 0, let main = mics.first, let off = main.offset else { return nil }
+            // Use the newest period that the main mic has fully recorded.
+            let start = main.ring.count >= s - off + length ? s : s - length
+            var data: [Int: [Float]] = [:], offsets: [Int: Int] = [:]
+            for m in mics {
+                guard let o = m.offset, let y = m.ring.read(from: start - o, count: length) else { continue }
+                data[m.channel] = y
+                offsets[m.channel] = o
+            }
+            return data.isEmpty ? nil : (start, offsets, data)
+        }
+    }
 
     private func restart() {
         for m in mics {
@@ -267,6 +336,7 @@ final class MeasurementEngine: @unchecked Sendable {
         var update = Update(response: nil, micPeakDB: 20 * log10(max(Double(pk), 1e-7)), micRMSDB: 20 * log10(max(Double(rms), 1e-7)), status: .idle, stability: 0)
         defer { let u = update; DispatchQueue.main.async { self.onUpdate?(u) } }
         analyzeSpectrum(&update)
+        measureSoundLevel(&update)
         let rc = refRing.count
         let newSamples = max(0, rc - lastRefCount)
         lastRefCount = rc
@@ -278,7 +348,8 @@ final class MeasurementEngine: @unchecked Sendable {
         for (k, mic) in mics.enumerated() {
             if mic.offset == nil {
                 if k == 0 { update.status = mic.failedSearches > 6 ? .noDelay : .findingDelay }
-                guard playedSamples > Int(sampleRate * 0.8) else { continue }
+                // The mic window of the search (0.68 s) plus the latency must hold only the new signal.
+                guard playedSamples > Int(sampleRate * 1.0) else { continue }
                 findDelay(mic)
                 if mic.offset == nil { continue }
             }
@@ -291,14 +362,18 @@ final class MeasurementEngine: @unchecked Sendable {
             mic.analyzer.add(reference: x, measured: y, newSamples: min(newSamples, n), interval: 0.1)
             // The impulse frame is longer than 1.2 s, so a new frame every 0.5 s is enough.
             let ni = mic.impulse.fftSize
-            if ticks % 5 == 0, let yl = mic.ring.read(from: mc - ni, count: ni), let xl = refRing.read(from: mc - ni + off, count: ni) {
+            // An impulse frame must lie after the signal change. A frame with the old signal gives a wrong peak,
+            // and the delay tracker can follow that peak.
+            let afterChange = mc - ni + off >= noiseStartCount
+            if ticks % 5 == 0, afterChange, let yl = mic.ring.read(from: mc - ni, count: ni), let xl = refRing.read(from: mc - ni + off, count: ni) {
                 mic.impulse.add(reference: xl, measured: yl)
                 mic.lastImpulse = mic.impulse.impulse()
                 if clockDriftCorrection, let d = mic.tracker.update(lag: mic.impulse.latestPeakLag()) {
                     // The mic hears the sound d samples later than before, so the reference moves back by d.
+                    // The status stays "measuring", so the calibration keeps the last response of this mic.
                     mic.offset = off - d
                     mic.reset(periodic: periodicSignal)
-                    if k == 0 { history = []; stableFrames = 0 }
+                    if k == 0 { history = []; stableFrames = 0; update.status = .measuring }
                     continue
                 }
             }
@@ -325,6 +400,18 @@ final class MeasurementEngine: @unchecked Sendable {
         update.stability = min(1, Double(stableFrames) / 15)
     }
 
+    /// Feeds each meter the samples since the last tick. After a gap, it starts again from the newest 0.1 s.
+    private func measureSoundLevel(_ update: inout Update) {
+        for (c, m) in meters {
+            let ring = inputRings[c], cnt = ring.count
+            var from = meterRead[c] ?? (cnt - 4800)
+            if cnt - from > ring.capacity / 2 { from = cnt - 4800 }
+            if cnt > from, let x = ring.read(from: from, count: cnt - from) { m.process(x) }
+            meterRead[c] = cnt
+            update.soundLevels[c] = m.levels()
+        }
+    }
+
     private func analyzeSpectrum(_ update: inout Update) {
         for (i, c) in spectrumChannels.enumerated() {
             let ring = inputRings[c], a = spectrumAnalyzers[c]!
@@ -336,8 +423,8 @@ final class MeasurementEngine: @unchecked Sendable {
     }
 
     private func findDelay(_ mic: Mic) {
-        // Periodic noise matches at every period. A search range shorter than one period keeps the match unique.
-        let mLen = 1 << 15, rLen = periodicSignal ? mLen + (1 << 15) : 1 << 17
+        // A repeating signal matches at every period. A search range shorter than one period keeps the match unique.
+        let mLen = 1 << 15, rLen = mLen + min((1 << 17) - mLen, (signalPeriod ?? Int.max) - 1)
         let mc = mic.ring.count, rc = refRing.count
         guard let m = mic.ring.read(from: mc - mLen, count: mLen),
               let r = refRing.read(from: rc - rLen, count: rLen),
