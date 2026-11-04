@@ -209,6 +209,9 @@ struct SettingsView: View {
             CalibrationSettings()
                 .tabItem { Text("Calibration") }
 
+            RemoteSettings()
+                .tabItem { Text("Remote") }
+
             Form {
                 Section("Backup") {
                     Text("A backup holds the settings, the speaker layout, the target curve and the calibration results. It does not hold snapshots.")
@@ -367,5 +370,53 @@ struct MicCalibrationRow: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// Turns the web viewer and the JSON API on and off.
+struct RemoteSettings: View {
+    @Environment(AppModel.self) private var model
+    @State private var lan = false
+
+    var body: some View {
+        Form {
+            Section("Web viewer and API") {
+                Toggle("Allow connections from the local network", isOn: $lan)
+                    .onChange(of: lan) { if model.remote != nil { model.startRemote(lan: lan) } }
+                if lan {
+                    Text("Warning: every device on the network that has the URL can read the measurements and start the test signal. Use this only on a network that you trust.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                HStack {
+                    if let r = model.remote {
+                        Circle().fill(.green).frame(width: 8, height: 8)
+                        Text(r.viewerURL).font(.caption.monospaced()).textSelection(.enabled).lineLimit(1).truncationMode(.middle)
+                        Button("Copy URL") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(r.viewerURL, forType: .string)
+                        }
+                        Button("Stop") { model.stopRemote() }
+                    } else {
+                        Text("The server is off.").foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Start Server") { model.startRemote(lan: lan) }
+                    }
+                }
+                if let e = model.remoteError { Text(e).foregroundStyle(.red) }
+                Text("The URL holds a random token. The server answers only a request with this token. The server stops when the app quits.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("API") {
+                Text("""
+                GET  /api/status, /api/response?channel=N, /api/impulse?channel=N&ms=100, /api/spectrum, /api/spl
+                POST /api/generator/start  {"signal": "Pink Noise", "levelDBFS": -20, "channel": 0}
+                POST /api/generator/stop
+                POST /api/snapshot  {"name": "…"}
+                Send the token as ?token=… or as the header Authorization: Bearer ….
+                """)
+                .font(.caption.monospaced()).textSelection(.enabled)
+            }
+        }
+        .formStyle(.grouped)
     }
 }

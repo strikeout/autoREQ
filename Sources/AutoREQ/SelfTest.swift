@@ -111,7 +111,25 @@ enum SelfTest {
             periodicOK = abs(ir.timeMs(peak)) < 0.1 && refl.isEmpty && ir.samples[peak] > 0.8
         } else { say("periodic pink: no impulse response") }
 
-        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK && secondOK && sweepOK && splOK
+        // The remote server answers a request with the token, and refuses a request without it.
+        var remoteOK = false
+        let demo = AppModel(demo: PersistedState())
+        let server = RemoteServer(model: demo, port: 0)
+        do {
+            try server.start(lan: false)
+            try? await Task.sleep(for: .milliseconds(500))
+            func status(_ path: String) async -> Int {
+                guard let url = URL(string: "http://127.0.0.1:\(server.port)\(path)"),
+                      let (_, resp) = try? await URLSession.shared.data(from: url) else { return -1 }
+                return (resp as? HTTPURLResponse)?.statusCode ?? -1
+            }
+            let good = await status("/api/status?token=\(server.token)"), bad = await status("/api/status?token=wrong"), page = await status("/?token=\(server.token)")
+            say("remote: status \(good), wrong token \(bad), viewer \(page)")
+            remoteOK = good == 200 && bad == 401 && page == 200
+        } catch { say("remote: \(error.localizedDescription)") }
+        server.stop()
+
+        let ok = abs(mag) < 1 && spread < 2 && coh > 0.9 && irOK && rtaOK && sineOK && periodicOK && secondOK && sweepOK && splOK && remoteOK
         say(ok ? "PASS" : "FAIL")
         return ok ? 0 : 1
     }

@@ -214,6 +214,8 @@ Effort: large. Risk: high. The standard has many details, and each detail change
 
 ## Phase 7 — v1.8.0: Remote access and API
 
+Status: done in v1.8.0. The web viewer polls the JSON API, so the server needs no WebSocket.
+
 1. Add a local HTTP and WebSocket server with `NWListener`. The server is off by default.
 2. Add a read-only web viewer for the live traces and the SPL meters.
 3. Add a JSON API. It starts and stops the generator, takes a snapshot, and reads a response, an

@@ -485,6 +485,39 @@ final class AppModel {
             + (hi - lo > 0.1 ? " The latency changes between runs. Use one interface for the mic and the speakers, or turn on Track Delay." : "")
     }
 
+    // MARK: Remote access
+
+    /// The web viewer and JSON API server. It is nil while it is off.
+    private(set) var remote: RemoteServer?
+    var remoteError: String?
+
+    /// Starts the server on 127.0.0.1, or on all interfaces with `lan`. The token stays the same until the app quits.
+    func startRemote(lan: Bool) {
+        let r = remote ?? RemoteServer(model: self)
+        r.onFailure = { [weak self] msg in self?.remoteError = msg; self?.remote = nil }
+        do {
+            try r.start(lan: lan)
+            remote = r
+            remoteError = nil
+            RemoteAPI.splProvider = { m in
+                guard m.splRunning || !m.soundLevels.isEmpty else { return ["available": false] }
+                let multi = m.state.spl.channels.count > 1
+                let meters: [[String: Any]] = m.state.spl.meters.map { spec in
+                    let v = m.soundLevels[spec.channel].flatMap { spec.metric.value($0) }
+                    return ["label": spec.metric.rawValue + (multi ? " · Ch \(spec.channel + 1)" : ""), "value": v.map { $0 as Any } ?? NSNull()]
+                }
+                return ["available": true, "meters": meters]
+            }
+        } catch {
+            remoteError = "The server did not start: \(error.localizedDescription)"
+        }
+    }
+
+    func stopRemote() {
+        remote?.stop()
+        remote = nil
+    }
+
     // MARK: Background noise for STI
 
     /// Reads the octave-band noise levels from 125 Hz to 8 kHz on `channel` for 5 s, in dB SPL.

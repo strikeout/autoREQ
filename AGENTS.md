@@ -167,6 +167,9 @@ cat version.txt
   A simplified Lundeby method truncates the decay. `STIResult.mtf` is the corrected MTF.
 - The masking slope, the reception threshold and the male speech spectrum in
   `SpeechTransmission.swift` are from memory of the standard. Check them against IEC 60268-16 ed. 5.
+- `RemoteServer` uses `NWListener` with plain HTTP and closes each connection after one reply. It
+  binds to 127.0.0.1 unless the user allows the LAN. It does not share a port with another app;
+  a bind failure reaches `AppModel.remoteError`. The web viewer polls the API, so there is no WebSocket.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true

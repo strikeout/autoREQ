@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.0
+
+- The new Remote tab in Settings starts a local web viewer and a JSON API. The server is off by default.
+- The web viewer shows the live transfer function, the RTA and the SPL meters, and polls twice each second.
+- The API reads the status, the responses, the impulse response, the spectrum and the SPL values.
+- The API also starts and stops the generator and takes snapshots.
+- Each request needs a random token. The server listens on 127.0.0.1 unless you allow the local network.
+
 ## v1.7.0
 
 - The Room Analysis screen shows the STI, the STIPA and the class of a measurement.

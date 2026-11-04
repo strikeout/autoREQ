@@ -76,6 +76,9 @@ The Target Curve screen shows the selected preset or your custom curve.
 - **SPL meter:** The SPL screen calibrates each input with a 94 dB or 114 dB calibrator. It shows
   A, C and Z levels with Fast, Slow and Impulse time weighting, Leq, Lmax and peaks. It also shows
   the OSHA and NIOSH noise dose, and the band levels. A log writes one CSV line each second.
+- **Remote access:** A local web viewer shows the live transfer function, the RTA and the SPL
+  meters in a browser. A JSON API reads the measurements and controls the generator. The server
+  is off by default and needs a random token.
 - **Target curves:** Five preset curves are available. You can also make a custom curve from
   points.
 - **Loopback:** The app captures the system audio from a virtual audio device. It applies the
@@ -247,6 +250,18 @@ its level, but the room keeps some of the decay.
 
 The meters and the doses start again when you click **Reset Leq, maxima and doses**. The calibration
 uses the 1 kHz tone only. Import the calibration file of the mic for the frequency response.
+
+### Use the web viewer and the API
+
+> **Warning:** On the local network, every device that has the URL can read the measurements and
+> start the test signal. Turn on network access only on a network that you trust.
+
+1. Open **Settings → Remote**.
+2. Click **Start Server**. The server listens on 127.0.0.1, port 52770.
+3. Click **Copy URL**, and open the URL in a browser.
+4. To use another device, turn on **Allow connections from the local network**.
+
+The **API** section lists the endpoints. Each request needs the token from the URL.
 
 ### Use the loopback correction
 
