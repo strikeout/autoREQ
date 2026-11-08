@@ -47,25 +47,38 @@ public final class ImpulseAnalyzer {
     public let sampleRate: Double
     /// The number of frames in the running average.
     public var maxFrames = 16
+    /// Set this when the reference repeats with a period of `fftSize`, for example periodic pink noise.
+    /// One frame is then exactly one period, and the frame has no window error to remove.
+    public var periodic = false
     public private(set) var frameCount = 0
 
     private let fwd: vDSP.DiscreteFourierTransform<Float>
-    private let inv: vDSP.DiscreteFourierTransform<Float>
+    let inverseDFT: vDSP.DiscreteFourierTransform<Float>
+    private var inv: vDSP.DiscreteFourierTransform<Float> { inverseDFT }
+    /// The PHAT-weighted cross spectrum of the newest frame, for `latestPeakLag`.
+    var lastCross: (re: [Float], im: [Float])?
     private var gxx: [Double], gxyRe: [Double], gxyIm: [Double]
 
-    public init(sampleRate: Double) {
+    /// The frame length for `sampleRate`: the first power of two above 1.2 s.
+    public static func frameLength(sampleRate: Double) -> Int {
         var n = 1 << 14
         while Double(n) < sampleRate * 1.2 { n <<= 1 }
+        return n
+    }
+
+    public init(sampleRate: Double) {
+        let n = Self.frameLength(sampleRate: sampleRate)
         fftSize = n
         self.sampleRate = sampleRate
         fwd = try! vDSP.DiscreteFourierTransform(count: n, direction: .forward, transformType: .complexComplex, ofType: Float.self)
-        inv = try! vDSP.DiscreteFourierTransform(count: n, direction: .inverse, transformType: .complexComplex, ofType: Float.self)
+        inverseDFT = try! vDSP.DiscreteFourierTransform(count: n, direction: .inverse, transformType: .complexComplex, ofType: Float.self)
         gxx = .init(repeating: 0, count: n / 2 + 1); gxyRe = gxx; gxyIm = gxx
     }
 
     public func reset() {
         for k in 0..<gxx.count { gxx[k] = 0; gxyRe[k] = 0; gxyIm[k] = 0 }
         frameCount = 0
+        lastCross = nil
     }
 
     /// Adds one frame. Both arrays hold `fftSize` time-aligned samples.
@@ -75,6 +88,14 @@ public final class ImpulseAnalyzer {
         let fx = fwd.transform(real: x, imaginary: zeros)
         let fy = fwd.transform(real: y, imaginary: zeros)
         frameCount += 1
+        var cr = [Float](repeating: 0, count: fftSize), ci = cr
+        for k in 0..<fftSize {
+            let re = fx.real[k] * fy.real[k] + fx.imaginary[k] * fy.imaginary[k]
+            let im = fx.real[k] * fy.imaginary[k] - fx.imaginary[k] * fy.real[k]
+            let m = max((re * re + im * im).squareRoot(), 1e-20)
+            cr[k] = re / m; ci[k] = im / m
+        }
+        lastCross = (cr, ci)
         let alpha = 1 / Double(min(frameCount, maxFrames))
         for k in 0..<gxx.count {
             let xr = Double(fx.real[k]), xi = Double(fx.imaginary[k])
@@ -101,7 +122,7 @@ public final class ImpulseAnalyzer {
         var out = [Float](repeating: 0, count: pre + half)
         for i in 0..<out.count {
             let lag = i - pre
-            let w = 1 - Double(abs(lag)) / Double(n)
+            let w = periodic ? 1 : 1 - Double(abs(lag)) / Double(n)
             out[i] = t[(lag + n) % n] / Float(Double(n) * w)
         }
         return ImpulseResponse(samples: out, sampleRate: sampleRate, zeroIndex: pre)

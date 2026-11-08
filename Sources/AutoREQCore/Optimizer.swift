@@ -62,6 +62,10 @@ public struct CorrectionOptions: Codable, Hashable, Sendable {
     public var maxBoostDB: Double = 9
     public var quickPositions: Int = 1
     public var fullPositions: Int = 3
+    /// The phase correction pass is optional in the stored state, so older state files still decode.
+    public var phaseCorrectionStored: Bool?
+    /// Adds all-pass filters that align the phase of the subs and the tops at the crossover. It is off by default.
+    public var phaseCorrection: Bool { get { phaseCorrectionStored ?? false } set { phaseCorrectionStored = newValue } }
 
     public init() {}
 }

@@ -16,14 +16,19 @@ final class CalibrationSession {
     // Levels
     var noiseFloorDB: Double?
     var levelSpeakerIndex = 0
-    var noiseLevelDBFS = -12.0
+    /// The RMS level of the pink noise. Its peaks are about 13 dB higher.
+    var noiseLevelDBFS = -20.0
 
     // Measure
+    /// The round in the current area. Each round measures one position for each mic.
     var position = 0
+    /// The index of the current area in `plan`.
+    var areaIndex = 0
     var currentSpeaker: Speaker?
     var waitingForMove = false
     var measureMessage = ""
-    var measurements: [[UUID: Response]] = []
+    /// One set of speaker measurements for each mic position, with the index of its area.
+    var measurements: [(area: Int, set: [UUID: Response])] = []
     private var runTask: Task<Void, Never>?
 
     // Calculate
@@ -35,7 +40,23 @@ final class CalibrationSession {
     init(app: AppModel) { self.app = app }
 
     var speakers: [Speaker] { app.state.speakers.filter { $0.outputChannel != nil } }
-    var positions: Int { mode == .quick ? app.state.options.quickPositions : app.state.options.fullPositions }
+    /// The listening areas of this measurement. Quick mode measures the main area only.
+    var plan: [ListeningArea] {
+        if mode == .quick {
+            var main = app.state.areas[0]
+            main.positions = app.state.options.quickPositions
+            main.weight = 1
+            return [main]
+        }
+        return app.state.areas
+    }
+    var area: ListeningArea { plan[min(areaIndex, plan.count - 1)] }
+    /// The number of positions in the current area.
+    var positions: Int { area.positions }
+    /// The number of mics that measure at the same time.
+    var micCount: Int { app.engine?.micChannels.count ?? 1 + app.state.extraMicChannels.filter { $0 != app.state.micChannel }.count }
+    /// The number of mic moves in the current area. Each round measures one position for each mic.
+    var rounds: Int { max(1, Int((Double(positions) / Double(micCount)).rounded(.up))) }
 
     // MARK: Levels
 
@@ -72,6 +93,7 @@ final class CalibrationSession {
         app.setNoise([])
         stage = .measure
         position = 0
+        areaIndex = 0
         measurements = []
         runPosition()
     }
@@ -79,12 +101,14 @@ final class CalibrationSession {
     func continueAfterMove() {
         waitingForMove = false
         position += 1
+        if position >= rounds { areaIndex += 1; position = 0 }
         runPosition()
     }
 
     private func runPosition() {
         runTask = Task {
-            var set: [UUID: Response] = [:]
+            // One set of measurements for each mic channel.
+            var sets: [Int: [UUID: Response]] = [:]
             app.setAveraging(.fifo16)
             for s in speakers {
                 guard let ch = s.outputChannel else { continue }
@@ -100,15 +124,30 @@ final class CalibrationSession {
                     try? await Task.sleep(for: .milliseconds(100))
                 }
                 if Task.isCancelled { return }
-                if let r = app.live, app.status == .measuring { set[s.id] = r } else { measureMessage = "\(s.name) gave no usable signal. It will be skipped." }
+                // Each mic with a response counts. The main mic can miss a speaker that another mic hears.
+                if !app.liveByChannel.isEmpty {
+                    for (ch, r) in app.liveByChannel { sets[ch, default: [:]][s.id] = r }
+                } else { measureMessage = "\(s.name) gave no usable signal. It will be skipped." }
                 app.setNoise([])
                 try? await Task.sleep(for: .milliseconds(400))
             }
             currentSpeaker = nil
-            measurements.append(set)
-            if position + 1 < positions {
+            let a = areaIndex
+            let ordered = sets.keys.sorted().map { sets[$0]! }
+            let room = max(0, positions - measurements.filter { $0.area == a }.count)
+            var keep = Array(ordered.prefix(room))
+            // A kept mic can miss a speaker. Then the speaker takes the measurement of a mic that the area does not need.
+            // Without this, the speaker drops out of the result.
+            for extra in ordered.dropFirst(room) {
+                for i in keep.indices { for (id, r) in extra where keep[i][id] == nil { keep[i][id] = r } }
+            }
+            for set in keep { measurements.append((a, set)) }
+            if position + 1 < rounds {
                 waitingForMove = true
-                measureMessage = "Move the mic 5–10 cm, then continue."
+                measureMessage = area.size.placement
+            } else if areaIndex + 1 < plan.count {
+                waitingForMove = true
+                measureMessage = "Move the mic to the area \(plan[areaIndex + 1].name), then continue."
             } else {
                 measureMessage = "Measurements done."
                 calculate()
@@ -125,12 +164,15 @@ final class CalibrationSession {
 
     // MARK: Calculate
 
-    /// Averages each speaker over all positions, then runs the planner.
+    /// Averages each speaker over the positions of each area, weights the areas, then runs the planner.
+    /// The main area comes first, so its first position gives the phase for the time alignment.
     func calculate() {
         var averaged: [UUID: Response] = [:]
+        let areas = plan
         for s in speakers {
-            let rs = measurements.compactMap { $0[s.id] }
-            if let a = Response.powerAverage(rs) { averaged[s.id] = a }
+            let groups = areas.indices.map { a in (weight: areas[a].weight, positions: measurements.filter { $0.area == a }.compactMap { $0.set[s.id] }) }
+                .filter { !$0.positions.isEmpty }
+            if let r = ListeningArea.combine(groups) { averaged[s.id] = r }
         }
         calculate(with: averaged)
     }

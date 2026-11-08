@@ -38,6 +38,14 @@ struct AudioDevice: Identifiable, Hashable {
         return AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<Float64>.size), &r) == noErr
     }
 
+    /// Sets the I/O buffer size of a device in frames. A small buffer gives less latency and more CPU load.
+    @discardableResult
+    static func setBufferSize(_ frames: Int, for id: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyBufferFrameSize, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var n = UInt32(frames)
+        return AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<UInt32>.size), &n) == noErr
+    }
+
     static func sampleRate(of id: AudioDeviceID) -> Double? {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var r = Float64(0)
@@ -119,4 +127,15 @@ final class InputStream {
     }
 
     func stop() { engine.stop() }
+}
+
+extension AudioDevice {
+    /// True for an aggregate device from Audio MIDI Setup. Its sub-devices can have separate clocks.
+    var isAggregate: Bool {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyTransportType, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var type: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &type) == noErr else { return false }
+        return type == kAudioDeviceTransportTypeAggregate
+    }
 }

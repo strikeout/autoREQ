@@ -28,6 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let i = args.firstIndex(of: "--screenshots"), i + 1 < args.count {
             Task { @MainActor in exit(await Screenshots.run(directory: args[i + 1])) }
         }
+        if let i = args.firstIndex(of: "--flowtest"), i + 1 < args.count {
+            Task { @MainActor in exit(await FlowTest.run(deviceName: args[i + 1])) }
+        }
         if let i = args.firstIndex(of: "--selftest"), i + 1 < args.count {
             Task { @MainActor in exit(await SelfTest.run(deviceName: args[i + 1])) }
         }
@@ -38,12 +41,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 enum AppSection: String, CaseIterable, Identifiable {
-    case home = "Home", measure = "Measure", calibrate = "Calibrate", room = "Room Analysis", loopback = "Loopback", target = "Target Curve", settings = "Settings"
+    case home = "Home", measure = "Measure", spectrum = "Spectrum", spl = "SPL", calibrate = "Calibrate", room = "Room Analysis", loopback = "Loopback", target = "Target Curve", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .home: "house"
         case .measure: "waveform.path.ecg"
+        case .spectrum: "chart.bar.xaxis"
+        case .spl: "gauge.with.dots.needle.67percent"
         case .calibrate: "wand.and.stars"
         case .room: "waveform.badge.magnifyingglass"
         case .loopback: "arrow.triangle.2.circlepath"
@@ -83,6 +88,8 @@ struct ContentView: View {
                 case .home: HomeView(section: $section)
                 case .measure: if let session { MeasureView(section: $section, session: session) }
                 case .calibrate: if let session { CalibrateView(session: session) }
+                case .spectrum: SpectrumView()
+                case .spl: SPLView()
                 case .room: RoomView()
                 case .loopback: LoopbackView()
                 case .target: TargetCurveView()

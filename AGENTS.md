@@ -88,6 +88,10 @@ cat version.txt
 - **Match the surrounding code.** Its naming, its comment density, its idioms — not yours.
 - **Run the test command before saying something works.** If there are no tests, say that
   plainly instead of implying verification.
+- **Run the flow test before you report a feature or a fix as done.** Build the app with
+  `sh scripts/bundle.sh`, then run `sh scripts/flowtest.sh "VB-Cable"`. A new screen or a new
+  user flow gets a step in `Sources/AutoREQ/FlowTest.swift` in the same change. `swift test`
+  does not draw the views, and a view crash in v1.8.2 passed five reviews and the self-test.
 - **Never commit secrets.** Keys, tokens and `.env` files stay out of the repo; document the
   *names* of the required env vars here, never their values.
 - **Commit and push only when asked.** If on the default branch, branch first.
@@ -126,6 +130,61 @@ cat version.txt
   measurement. The engine adds an impulse frame every 5th tick (0.5 s).
 - The JSON state keeps `Response.impulse` as raw Float32 data in base64. `applying`, `sum` and
   `powerAverage` set it to nil, because their output is no longer a measurement.
+- Generator levels are RMS levels relative to a digital value of 1.0. Each `SignalGenerator`
+  signal has an RMS of 1.0 before the gain. Before v1.2.0, the pink noise was 7.5 dB below its
+  nominal level, so the old calibration default of −12 dB equals −20 dBFS RMS now.
+- The render thread reads the generator through `Mutex.withLockIfAvailable`. It plays silence for
+  one buffer if the main thread holds the lock to swap the signal. Build a new `SignalGenerator`
+  on the main thread, because periodic noise and file playback allocate a table.
+- Periodic pink noise has a period of `ImpulseAnalyzer.fftSize`. The engine sets
+  `ImpulseAnalyzer.periodic`, which turns off the (1 - |t| / N) correction. The delay search then
+  uses a range shorter than one period, because the noise matches at every period.
+- A tone (sine or dual sine) gives no transfer function. The engine skips the transfer function
+  and reports the status `.tone`.
+- The engine writes the first 8 input channels to `inputRings` for the RTA. `SpectrumAnalyzer`
+  uses the IEC 61260-1 base-ten bands and weights each FFT bin by its overlap with the band.
+- `WindowedTransferAnalyzer` (FTW) runs one `TransferAnalyzer` for each window. At 48 kHz, the
+  windows are 64k below 160 Hz, 16k to 1.25 kHz, 4k to 5 kHz and 1k above. A 1/3-octave crossfade
+  joins the parts. A
+  short window adds up to 4 frames for each tick, so its average covers the same time.
+- The engine keeps one `Mic` for each mic channel, with its own delay offset, analysers and
+  `DelayTracker`. The first mic is the main mic. Extra mics read `inputRings`, so they must be
+  among the first 8 input channels.
+- Delay tracking (the setting `clockDrift`) replaces the old search every 3 s. It reads the
+  GCC-PHAT peak of the newest impulse frame. A shift must show in two frames in a row, and a shift
+  of one sample does not count. An impulse frame must lie after the last signal change.
+- The main mic ring and the ring of each extra mic hold 12.5 s at the sample rate. That is a 10 s
+  sweep and its tail. The other input rings hold 2^18 samples. The delay search range stays shorter than
+  the period of a repeating signal (periodic pink, sweep or file).
+- The mic calibration of the main mic has the device UID as its key. An extra mic uses `uid#channel`.
+- The sweep measurement plays `SignalKind.logSweep`: one sweep and 2 s of silence, looped. The
+  render thread stores the reference index of each table start in `periodStart`.
+  `MeasurementEngine.lastPeriod` reads one aligned period for each mic.
+- `LogSweep.impulse` deconvolves with a regularised division, so a wire gives a peak of about 0.81
+  at 48 kHz. That is the peak of a 20 Hz–20 kHz band-limited impulse, and the in-band gain is 1.
+- `SoundLevelMeter` gets the raw samples of `inputRings` on each tick. The SPL calibration offset
+  has the key `uid#channel` in `SPLSettings.calibrations`. It is separate from the mic calibration file.
+- The Spectrum screen and the SPL screen share the RTA of the engine. `AppModel.engineBanding`
+  holds the band width that the engine uses now.
+- The phase correction (`CorrectionOptions.phaseCorrection`) runs after the time alignment. It adds
+  the all-pass filters of `PhaseAligner.align` to the side whose phase leads. Then the sub fine
+  alignment runs again, because an all-pass changes the phase at the crossover.
+- `CalibrationSession.measurements` keeps the area index of each position. `ListeningArea.combine`
+  gives each area its weight, whatever its number of positions. The main area is first.
+- `SpeechTransmission.analyze` filters the impulse response in octaves with a zero-phase FFT filter.
+  A simplified Lundeby method truncates the decay. `STIResult.mtf` is the corrected MTF.
+- The masking slope, the reception threshold and the male speech spectrum in
+  `SpeechTransmission.swift` are from memory of the standard. Check them against IEC 60268-16 ed. 5.
+- `RemoteServer` uses `NWListener` with plain HTTP and closes each connection after one reply. It
+  binds to 127.0.0.1 unless the user allows the LAN. It does not share a port with another app;
+  a bind failure reaches `AppModel.remoteError`. The web viewer polls the API, so there is no WebSocket.
+  A restart waits until the old listener reports `.cancelled`, because the old listener holds the port.
+  `JSONSerialization` raises an exception on NaN, so check `isValidJSONObject` before each reply.
+- `FlowTest` uses `AppModel(test:)`: a model with real audio devices that saves nothing. It
+  draws each screen in a hidden window with `cacheDisplay`, so a crash in a view body stops the
+  test. `open -W` exits with 0 also after a crash, so `scripts/flowtest.sh` checks the last line.
+- When a speaker or a signal changes, `AppModel` clears `live` and `liveByChannel`. Otherwise the
+  calibration can store the response of the previous speaker for a mic that hears nothing.
 - The preset target-curve shapes are approximations. The Omnissiah manual describes them in words only.
 
 ## Keeping this file true
