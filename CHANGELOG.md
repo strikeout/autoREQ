@@ -1,5 +1,88 @@
 # Changelog
 
+## v1.8.4
+
+- A new flow test drives each screen through its user flow on a loop-through device. `scripts/flowtest.sh` runs it with the self-test.
+- With several mics, the guided calibration no longer drops a speaker that the main mic does not hear. Another mic gives its measurement.
+- A change of the speaker or the signal clears the old live responses. Before, a mic that heard nothing could keep the response of the previous speaker.
+
+## v1.8.3
+
+- The Room Analysis screen no longer stops the app after a sweep. Before, it drew the new impulse response with the old analysis for a moment.
+
+## v1.8.2
+
+- The app no longer stops when you remove a speaker or a listening area on the Calibrate screen.
+- Extra mics, long sweeps and the SPL calibration now work at all sample rates. Before, the sample rings were too short.
+- Find in the phase delay control now flattens the phase. Before, it doubled the phase slope.
+- A delay tracker shift no longer makes the guided calibration skip a speaker.
+- The app removes extra mics, spectrum channels and SPL channels that the current mic device does not have.
+- The SPL log keeps its meters when you turn off a channel on the SPL screen.
+- A short tap on Test Speakers no longer leaves the noise on.
+- Stop Timer keeps the captures and adds no average. The averages now group by mic channel.
+- The clip warning uses the measured crest of an audio file and the real crest of a sweep. The output clips at full scale, so the reference stays equal to the output.
+- A new signal choice wins over an audio file that still loads. Auto Capture stops when the signal cannot start.
+- A WAV import keeps 10 ms before the peak and 10 s after it.
+- T20 and T30 need 35 dB and 45 dB of range, so each fit ends 10 dB above the noise (ISO 3382-1).
+- The delay tracker ignores a shift of one sample, so it no longer moves back and forth.
+- The impulse analyser uses only frames after a signal change. Before, a frame with the old signal could move the delay.
+- A reference snapshot no longer adds a phase slope from the latency of another engine run.
+- The remote server waits for the old port when it restarts. It closes a connection after 10 s and accepts 32 connections at most.
+- A request with ms=nan no longer stops the app. A value that is not valid JSON gives an error reply.
+- The Remote tab shows the correct network setting after you open it again. The token stays the same until the app quits.
+- On the Target Curve screen, a drag moves only the point under the pointer at the start. The frequency field stays in 20 Hz to 20 kHz. The custom points stay when you select a preset.
+
+## v1.8.1
+
+- The Target Curve screen shows the presets as cards with a small preview of each curve.
+- The chart fills the area under the curve and marks the bass, the midrange and the treble.
+- The chart can show the measured room of the last calibration and the other presets.
+- You can drag the points of the custom curve. The custom points stay when you select a preset.
+
+## v1.8.0
+
+- The new Remote tab in Settings starts a local web viewer and a JSON API. The server is off by default.
+- The web viewer shows the live transfer function, the RTA and the SPL meters, and polls twice each second.
+- The API reads the status, the responses, the impulse response, the spectrum and the SPL values.
+- The API also starts and stops the generator and takes snapshots.
+- Each request needs a random token. The server listens on 127.0.0.1 unless you allow the local network.
+
+## v1.7.0
+
+- The Room Analysis screen shows the STI, the STIPA and the class of a measurement.
+- The screen also shows the transmission index of each octave band.
+- You can set the speech level and turn the auditory masking and threshold on or off.
+- The app can read the background noise in octave bands from a calibrated mic and include it in the STI.
+- The self-test also checks that the loopback has an STI near 1.
+
+## v1.6.0
+
+- The optional phase correction adds all-pass filters, so the subs and the tops stay in phase at the crossover.
+- The Complete Measurement mode has a space plan. Extra listening areas have a name, a size, positions and a weight.
+- Diagnostic cards explain boundary nulls, room modes, reflections, weak measurements and uncorrected peaks.
+- The cards show live on the Measure screen and on the results page.
+- The latency drift check measures the latency 3 to 20 times and writes a CSV file.
+- Settings has a buffer size and a Test Speakers button.
+
+## v1.5.0
+
+- The new SPL screen calibrates each input with a 94 dB or 114 dB calibrator.
+- The meters show A, C and Z levels with Fast, Slow and Impulse time weighting, Leq, Lmax and peaks.
+- The meters also show rolling Leq values for 1, 10 and 15 min, and the OSHA and NIOSH noise dose.
+- You can add, remove and arrange the meters in a grid.
+- The screen shows the band levels in octaves or 1/3 octaves.
+- The SPL log writes one CSV line each second. It continues when the window closes.
+
+## v1.4.0
+
+- The Room Analysis screen measures with a log sweep. A sweep gives a 2 s impulse response and the harmonic distortion.
+- The generator has a Log Sweep signal for the Measure screen.
+- The screen shows EDT, T20 and T30 in octave bands or 1/3-octave bands, with the Lundeby noise correction.
+- The screen shows C50, C80, D50, Ts and the direct-to-reverberant ratio.
+- The screen shows the THD, H2 and H3 of a sweep.
+- The energy-time curves of other snapshots can show in the same chart.
+- Impulse responses export to and import from WAV files.
+
 ## v1.3.0
 
 - The transfer function uses frequency-dependent windows (FTW). A narrow bass resonance now reads within 1 dB of its true level.

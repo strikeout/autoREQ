@@ -214,7 +214,7 @@ public struct CalibrationPlanner {
         }
 
         // Fine alignment of each sub against the tops at the crossover.
-        if let fc, options.delayEstimation == .minimumPhaseError {
+        func fineAlign(_ fc: Double) {
             let band = grid.indices.filter { grid[$0] >= fc / 2 && grid[$0] <= fc * 2 }
             func complexAt(_ w: Work, _ i: Int, extraDelay: Double, inverted: Bool) -> Complex {
                 var h = w.pre.complex(i)
@@ -246,13 +246,33 @@ public struct CalibrationPlanner {
                 delay[w.speaker.id, default: 0] += bestShift
                 work[k].corr.inverted = bestInv
             }
-            // No negative delays: move every channel up by the same amount.
-            let minDelay = delay.values.min() ?? 0
-            if minDelay < 0 { for key in delay.keys { delay[key]! -= minDelay } }
+        }
+        if let fc, options.delayEstimation == .minimumPhaseError {
+            fineAlign(fc)
             notes.append("Time alignment: \(options.timeAlign.rawValue), refined by minimum phase error at the crossover.")
         } else {
             notes.append("Time alignment: \(options.timeAlign.rawValue), from the cross-correlation peak.")
         }
+
+        // Phase correction: all-pass filters on the side whose phase leads, then a new fine alignment.
+        if let fc, options.phaseCorrection, !subs.isEmpty, !tops.isEmpty {
+            func corrected(_ w: Work) -> Response {
+                w.pre.applying(w.corr.eq.map { $0.coefficients(sampleRate: sr) }, gainDB: w.corr.gainDB, delaySamples: delay[w.speaker.id] ?? 0, inverted: w.corr.inverted)
+            }
+            let ap = PhaseAligner.align(subwoofers: work.filter { $0.speaker.role == .subwoofer }.map(corrected),
+                                        tops: work.filter { $0.speaker.role == .fullRange }.map(corrected), band: (fc / 2)...(fc * 2))
+            if !ap.filters.isEmpty {
+                for i in work.indices where (work[i].speaker.role == .subwoofer) == ap.onSubwoofers { work[i].corr.eq += ap.filters }
+                if options.delayEstimation == .minimumPhaseError { fineAlign(fc) }
+                notes.append(String(format: "Phase correction: %d all-pass filters on the %@. The phase error at the crossover fell from %.2f to %.2f.",
+                                    ap.filters.count, ap.onSubwoofers ? "subwoofers" : "tops", ap.before, ap.after))
+            } else {
+                notes.append("Phase correction: the phase at the crossover is already aligned. The app added no all-pass filters.")
+            }
+        }
+        // No negative delays: move every channel up by the same amount.
+        let minDelay = delay.values.min() ?? 0
+        if minDelay < 0 { for key in delay.keys { delay[key]! -= minDelay } }
         for i in work.indices { work[i].corr.delayMs = (delay[work[i].speaker.id] ?? 0) / sr * 1000 }
 
         // Headroom: the loopback path is digital, so remove net boost to stop clipping.

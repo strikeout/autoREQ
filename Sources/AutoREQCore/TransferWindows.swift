@@ -106,8 +106,9 @@ public struct DelayTracker: Sendable {
 
     /// Returns the shift in samples to add to the measured delay, or nil to keep the delay.
     /// `lag` is the peak position of the newest frame relative to the current delay.
+    /// A lag of one sample is jitter around a fraction of a sample, so the tracker keeps the delay.
     public mutating func update(lag: Int?) -> Int? {
-        guard let lag, lag != 0 else { candidate = nil; count = 0; return nil }
+        guard let lag, abs(lag) >= 2 else { candidate = nil; count = 0; return nil }
         if let c = candidate, abs(c - lag) <= 1 { count += 1 } else { candidate = lag; count = 1 }
         guard count >= 2 else { return nil }
         candidate = nil
@@ -149,16 +150,16 @@ extension ImpulseResponse {
 extension Response {
     /// This response relative to `reference`: the magnitudes subtract, the phases subtract,
     /// and the coherence is the lower of the two.
+    /// Each phase is relative to its own latency. The latencies of two engine runs are not comparable.
+    /// The result therefore ignores the difference of the latencies and keeps the latency of this response.
     public func dividing(by reference: Response) -> Response {
         var r = self
         r.impulse = nil
         for i in 0..<FrequencyGrid.count {
-            let extra = Double(latencySamples - reference.latencySamples) / sampleRate
             r.magnitudeDB[i] = magnitudeDB[i] - reference.magnitudeDB[i]
-            r.phaseDeg[i] = wrapDegrees(phaseDeg[i] - reference.phaseDeg[i] - 360 * FrequencyGrid.frequencies[i] * extra)
+            r.phaseDeg[i] = wrapDegrees(phaseDeg[i] - reference.phaseDeg[i])
             r.coherence[i] = min(coherence[i], reference.coherence[i])
         }
-        r.latencySamples = reference.latencySamples
         return r
     }
 }

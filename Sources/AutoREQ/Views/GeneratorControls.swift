@@ -9,7 +9,7 @@ struct GeneratorControls: View {
     @State private var presetName = ""
 
     /// The peak-to-RMS ratio of each signal in dB. A file uses a typical value for music.
-    private static let crest: [SignalKind: Double] = [.pink: 13, .periodicPink: 14, .white: 5, .sine: 3, .dualSine: 6, .file: 15]
+    private static let crest: [SignalKind: Double] = [.pink: 13, .periodicPink: 14, .white: 5, .sine: 3, .dualSine: 6, .logSweep: 9, .file: 15]
 
     private func bind<T>(_ path: WritableKeyPath<GeneratorPreset, T>) -> Binding<T> {
         Binding(get: { model.state.generator[keyPath: path] }, set: { model.state.generator[keyPath: path] = $0; model.generatorChanged() })
@@ -28,6 +28,11 @@ struct GeneratorControls: View {
             case .dualSine:
                 frequency(bind(\.signal.frequency))
                 frequency(bind(\.signal.frequency2))
+            case .logSweep:
+                Picker("Length", selection: Binding(get: { g.signal.sweepSeconds ?? 2 }, set: { model.state.generator.signal.sweepSeconds = $0; model.generatorChanged() })) {
+                    ForEach([1.0, 2, 5, 10], id: \.self) { Text("\(Int($0)) s").tag($0) }
+                }
+                .frame(width: 130)
             case .file:
                 Button("Choose File…") { model.chooseGeneratorFile() }
                 Text(g.signal.filePath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "No file")
@@ -39,7 +44,7 @@ struct GeneratorControls: View {
                 Text("\(Int(g.levelDBFS)) dBFS RMS").monospacedDigit()
             }
             .fixedSize()
-            if g.levelDBFS + (Self.crest[g.signal.kind] ?? 0) > 0 {
+            if g.levelDBFS + crest(g.signal) > 0 {
                 Label("Peaks clip", systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.caption)
             }
             Picker("Output", selection: bind(\.channel)) {
@@ -70,6 +75,16 @@ struct GeneratorControls: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("A preset keeps the signal, the level and the output channel.")
+        }
+    }
+
+    /// The crest of the signal in dB. A file uses the measured crest after it loads. The sweep crest depends on its length,
+    /// because the table RMS includes 2 s of silence.
+    private func crest(_ s: SignalSettings) -> Double {
+        switch s.kind {
+        case .file: model.fileCrestDB ?? Self.crest[.file]!
+        case .logSweep: 3 + 10 * log10(((s.sweepSeconds ?? 2) + SignalGenerator.sweepTailSeconds) / (s.sweepSeconds ?? 2))
+        default: Self.crest[s.kind] ?? 0
         }
     }
 
