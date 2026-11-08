@@ -14,6 +14,12 @@ public struct Band: Hashable, Sendable {
     public var lower: Double
     public var upper: Double
 
+    public init(centre: Double, lower: Double, upper: Double) {
+        self.centre = centre
+        self.lower = lower
+        self.upper = upper
+    }
+
     /// The base-ten bands of IEC 61260-1 from 20 Hz to 20 kHz.
     public static func bands(_ b: Banding) -> [Band] {
         let g = pow(10, 0.3), n = Double(b.rawValue)

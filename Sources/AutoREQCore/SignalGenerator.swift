@@ -4,7 +4,7 @@ import Foundation
 /// The signal types of the generator.
 public enum SignalKind: String, Codable, CaseIterable, Sendable, Identifiable {
     case pink = "Pink Noise", white = "White Noise", periodicPink = "Periodic Pink Noise"
-    case sine = "Sine", dualSine = "Dual Sine", file = "File"
+    case sine = "Sine", dualSine = "Dual Sine", logSweep = "Log Sweep", file = "File"
     public var id: String { rawValue }
 
     /// A tone has energy at one or two frequencies only. The transfer function needs a broadband signal.
@@ -18,12 +18,15 @@ public struct SignalSettings: Codable, Hashable, Sendable {
     public var frequency2: Double
     /// The path of the audio file for `.file`.
     public var filePath: String?
+    /// The sweep length of `.logSweep` in seconds. It is optional, so older state files still decode.
+    public var sweepSeconds: Double?
 
-    public init(kind: SignalKind = .pink, frequency: Double = 1000, frequency2: Double = 60, filePath: String? = nil) {
+    public init(kind: SignalKind = .pink, frequency: Double = 1000, frequency2: Double = 60, filePath: String? = nil, sweepSeconds: Double? = nil) {
         self.kind = kind
         self.frequency = frequency
         self.frequency2 = frequency2
         self.filePath = filePath
+        self.sweepSeconds = sweepSeconds
     }
 
     public static let pink = SignalSettings()
@@ -32,6 +35,7 @@ public struct SignalSettings: Codable, Hashable, Sendable {
         switch kind {
         case .sine: String(format: "Sine %.0f Hz", frequency)
         case .dualSine: String(format: "Dual Sine %.0f + %.0f Hz", frequency, frequency2)
+        case .logSweep: String(format: "Log Sweep %.0f s", sweepSeconds ?? 2)
         case .file: filePath.map { "File: " + URL(fileURLWithPath: $0).lastPathComponent } ?? "File"
         default: kind.rawValue
         }
@@ -67,6 +71,9 @@ public struct SignalGenerator: Sendable {
     private let step1: Double, step2: Double
     private let table: [Float]
     private var index = 0
+    /// The position in the last `render` buffer where the table starts again, or nil.
+    /// The sweep measurement uses it to find the first sample of each sweep.
+    public private(set) var lastWrap: Int?
 
     /// The Kellet filter output has an RMS of about 0.19. This scale gives an RMS of 1.0.
     static let pinkScale: Float = 5.21
@@ -80,6 +87,7 @@ public struct SignalGenerator: Sendable {
         step2 = 2 * .pi * settings.frequency2 / sampleRate
         switch settings.kind {
         case .periodicPink: table = Self.periodicPink(length: periodLength, sampleRate: sampleRate)
+        case .logSweep: table = Self.normalized(Self.sweepTable(seconds: settings.sweepSeconds ?? 2, sampleRate: sampleRate))
         case .file: table = Self.normalized(fileSamples)
         default: table = []
         }
@@ -87,6 +95,7 @@ public struct SignalGenerator: Sendable {
 
     /// Writes `n` samples to `out`.
     public mutating func render(_ out: UnsafeMutablePointer<Float>, _ n: Int) {
+        lastWrap = nil
         switch settings.kind {
         case .pink:
             for i in 0..<n { out[i] = pink.next() * Self.pinkScale }
@@ -110,10 +119,11 @@ public struct SignalGenerator: Sendable {
                 if phase1 > 2 * .pi { phase1 -= 2 * .pi }
                 if phase2 > 2 * .pi { phase2 -= 2 * .pi }
             }
-        case .periodicPink, .file:
+        case .periodicPink, .logSweep, .file:
             guard !table.isEmpty else { for i in 0..<n { out[i] = 0 }; return }
             table.withUnsafeBufferPointer { t in
                 for i in 0..<n {
+                    if index == 0 { lastWrap = i }
                     out[i] = t[index]
                     index += 1
                     if index == t.count { index = 0 }
@@ -141,6 +151,14 @@ public struct SignalGenerator: Sendable {
         }
         let inv = try! vDSP.DiscreteFourierTransform(count: n, direction: .inverse, transformType: .complexComplex, ofType: Float.self)
         return normalized(inv.transform(real: re, imaginary: im).real)
+    }
+
+    /// The silence after each sweep. The impulse response of a sweep measurement has this length.
+    public static let sweepTailSeconds = 2.0
+
+    /// One sweep from 20 Hz to 20 kHz with a peak of 1.0, then `sweepTailSeconds` of silence.
+    public static func sweepTable(seconds: Double, sampleRate: Double) -> [Float] {
+        LogSweep(seconds: seconds, sampleRate: sampleRate).samples + [Float](repeating: 0, count: Int(sweepTailSeconds * sampleRate))
     }
 
     /// Scales `x` to an RMS of 1.0.

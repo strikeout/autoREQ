@@ -79,6 +79,9 @@ Effort: medium. Risk: low.
 
 ## Phase 2 — v1.3.0: Better transfer functions
 
+Status: done in v1.3.0. The app shows a warning for an aggregate device. It does not make an
+aggregate device itself.
+
 1. **Several mics at the same time.** Change `MeasurementEngine` from one mic channel to a list of
    channels. Each channel gets its own transfer function. The Complete Measurement mode can then
    measure several positions at the same time.
@@ -106,6 +109,9 @@ app can also make an aggregate device, but one interface is the better setup.
 Effort: large. Risk: medium. Phase 2 also makes the calibration better.
 
 ## Phase 3 — v1.4.0: The impulse response mode
+
+Status: done in v1.4.0. The sweep impulse response stays in the state file. It is 2 s long, so it
+is about 0.5 MB in each snapshot.
 
 1. **Log sweep.** Add a logarithmic sine sweep from 20 Hz to 20 kHz with a length of 1 s to 10 s.
    Calculate the impulse response with the inverse filter of the sweep. The impulse response then
@@ -137,6 +143,9 @@ Effort: large. Risk: medium.
 
 ## Phase 4 — v1.5.0: SPL meter and SPL log
 
+Status: done in v1.5.0. The band levels come from the RTA with slow averaging. The impulse detector
+is simpler than the detector of IEC 60651.
+
 1. **Level calibration.** Read a 94 dB or 114 dB calibrator at 1 kHz. Keep the dBFS offset for
    each mic and input. The mic calibration file keeps the frequency correction.
 2. **Weightings.** Add the A, C and Z frequency weightings from IEC 61672-1 as biquad filters.
@@ -165,6 +174,8 @@ Effort: medium. Risk: low.
 
 ## Phase 5 — v1.6.0: Calibration items from the Omnissiah manual
 
+Status: done in v1.6.0. The thresholds of the diagnostic cards come from synthetic data only.
+
 1. Add the phase correction pass to the optimizer.
 2. Add the space plan of the Complete Measurement mode. It has an area size and extra listening
    areas with a weight from 0.25 to 1.0.
@@ -181,6 +192,9 @@ calibration better first.
 Effort: large. Risk: medium.
 
 ## Phase 6 — v1.7.0: STI and STIPA
+
+Status: done in v1.7.0. The analytic tests pass. The check against the IEC test signals is not
+done, because the app has no copy of them.
 
 1. Calculate the modulation transfer function from the impulse response. Use the indirect method
    of IEC 60268-16 for 7 octave bands and 14 modulation frequencies.
@@ -199,6 +213,8 @@ This phase needs Phase 3 for the impulse response and Phase 4 for the absolute l
 Effort: large. Risk: high. The standard has many details, and each detail changes the result.
 
 ## Phase 7 — v1.8.0: Remote access and API
+
+Status: done in v1.8.0. The web viewer polls the JSON API, so the server needs no WebSocket.
 
 1. Add a local HTTP and WebSocket server with `NWListener`. The server is off by default.
 2. Add a read-only web viewer for the live traces and the SPL meters.

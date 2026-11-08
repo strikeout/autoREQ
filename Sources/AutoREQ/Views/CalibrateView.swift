@@ -64,12 +64,16 @@ struct ConfigureStage: View {
                     }.buttonStyle(.plain)
                 }
             }
-            HStack {
-                Text("Mic positions")
-                Picker("", selection: session.mode == .quick ? $model.state.options.quickPositions : $model.state.options.fullPositions) {
-                    ForEach(session.mode == .quick ? [1, 3, 5, 7] : [3, 5, 7, 9], id: \.self) { Text("\($0)").tag($0) }
-                }.frame(width: 80)
-                Text("5 positions is a good balance for Quick mode.").font(.caption).foregroundStyle(.secondary)
+            if session.mode == .quick {
+                HStack {
+                    Text("Mic positions")
+                    Picker("", selection: $model.state.options.quickPositions) {
+                        ForEach([1, 3, 5, 7], id: \.self) { Text("\($0)").tag($0) }
+                    }.frame(width: 80)
+                    Text("5 positions is a good balance for Quick mode.").font(.caption).foregroundStyle(.secondary)
+                }
+            } else {
+                SpacePlan()
             }
 
             GroupBox("System") {
@@ -91,7 +95,10 @@ struct ConfigureStage: View {
                             }.frame(width: 140)
                             if sp.outputChannel == nil { Text("Won't be measured.").font(.caption).foregroundStyle(.orange) }
                             Spacer()
-                            Button { model.state.speakers.removeAll { $0.id == sp.id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
+                            // Read the id before the removal. A read of `sp` inside `removeAll` reads the array
+                            // through the binding while the array changes, and Swift stops the app.
+                            let id = sp.id
+                            Button { model.state.speakers.removeAll { $0.id == id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
                         }
                     }
                     HStack {
@@ -218,7 +225,9 @@ struct MeasureStage: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Measure — position \(session.position + 1) of \(session.positions)").font(.title2.bold())
+            Text((session.plan.count > 1 ? "\(session.area.name) — " : "") + (session.micCount > 1
+                 ? "Measure — round \(session.position + 1) of \(session.rounds) (\(session.micCount) mics)"
+                 : "Measure — position \(session.position + 1) of \(session.positions)")).font(.title2.bold())
             Text(session.measureMessage).foregroundStyle(.secondary)
             if let live = model.live, session.currentSpeaker != nil {
                 ProgressView(value: model.stability) { Text("Confidence").font(.caption) }
@@ -337,18 +346,11 @@ struct ResultsStage: View {
     }
 
     private func diagnostics(_ chans: [ChannelResult]) -> some View {
-        let issues = chans.flatMap { c -> [String] in
-            var out: [String] = []
-            let lo = FrequencyGrid.index(of: c.correctedRange.lowerBound), hi = FrequencyGrid.index(of: min(c.correctedRange.upperBound, 10_000))
-            let coh = c.before.coherence[lo...hi].reduce(0, +) / Double(max(hi - lo + 1, 1))
-            if coh < 0.6 { out.append("\(c.correction.speakerName): low confidence (\(Int(coh * 100))%). Raise the test level or reduce room noise, then measure again.") }
-            if c.errorDB > 3 { out.append(String(format: "%@: %.1f dB RMS from the target after correction. Deep dips are usually cancellations; try another speaker or seat position.", c.correction.speakerName, c.errorDB)) }
-            return out
-        }
+        let findings = chans.flatMap { Diagnostics.results($0, impulse: nil) }
         return GroupBox("Diagnostics") {
-            VStack(alignment: .leading, spacing: 4) {
-                if issues.isEmpty { Text("No issues flagged — this measurement looks clean.").foregroundStyle(.green) }
-                ForEach(issues, id: \.self) { Text("• " + $0) }
+            VStack(alignment: .leading, spacing: 8) {
+                if findings.isEmpty { Text("No issues flagged — this measurement looks clean.").foregroundStyle(.green) }
+                ForEach(Array(findings.enumerated()), id: \.offset) { _, f in FindingCard(finding: f) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(4)
@@ -381,4 +383,75 @@ struct ResultsStage: View {
 
 extension Array {
     subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
+/// The listening areas of the Complete Measurement mode, with the positions and the weight of each area.
+struct SpacePlan: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        GroupBox("Configure Your Space") {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach($model.state.areas) { $a in
+                    let isMain = a.id == model.state.areas.first?.id
+                    HStack {
+                        TextField("Name", text: $a.name).frame(width: 140)
+                        Picker("", selection: Binding(get: { a.size }, set: { a.size = $0; a.positions = $0.suggestedPositions })) {
+                            ForEach(AreaSize.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                        .frame(width: 130)
+                        Stepper("\(a.positions) positions", value: $a.positions, in: 1...16).fixedSize()
+                        if isMain {
+                            Text("Main area").foregroundStyle(.secondary)
+                        } else {
+                            Picker("Weight", selection: Binding(get: { AreaWeight(rawValue: a.weight) ?? .balanced }, set: { a.weight = $0.rawValue })) {
+                                ForEach(AreaWeight.allCases) { Text("\($0.label) (\(String(format: "%.2f", $0.rawValue)))").tag($0) }
+                            }
+                            .frame(width: 220)
+                            let id = a.id
+                            Button { model.state.areas.removeAll { $0.id == id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.plain)
+                        }
+                        Spacer()
+                    }
+                    Text(a.size.placement).font(.caption).foregroundStyle(.secondary)
+                }
+                Button("Add Listening Area") {
+                    model.state.areas.append(ListeningArea(name: "Area \(model.state.areas.count + 1)", size: .singleSeat, weight: AreaWeight.balanced.rawValue))
+                }
+                Text("Each area counts with its weight, whatever its number of positions. The main area has the weight 1.0.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(6)
+        }
+    }
+}
+
+/// One diagnostic card. The colour shows the severity: orange for a warning, yellow for advice, grey for information.
+struct FindingCard: View {
+    let finding: Finding
+
+    private var color: Color {
+        switch finding.severity {
+        case .warning: .orange
+        case .advisory: .yellow
+        case .info: .gray
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Rectangle().fill(color).frame(width: 3)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(finding.title).bold()
+                    if let f = finding.frequency { Text(f >= 1000 ? String(format: "%.1f kHz", f / 1000) : String(format: "%.0f Hz", f)).foregroundStyle(.secondary) }
+                    Text(finding.channel).font(.caption).foregroundStyle(.secondary)
+                }
+                Text(finding.detail).font(.callout)
+                Text(finding.action).font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
 }
