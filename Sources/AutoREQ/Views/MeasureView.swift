@@ -78,11 +78,16 @@ struct MeasureView: View {
         if let r = sel?.displayed ?? model.live {
             let findings = Diagnostics.live(r, channel: sel?.name ?? "Live", range: 20...20_000)
             DisclosureGroup(isExpanded: $showDiagnostics) {
-                VStack(alignment: .leading, spacing: 8) {
-                    if findings.isEmpty { Text("No issues flagged.").foregroundStyle(.green) }
-                    ForEach(Array(findings.prefix(4).enumerated()), id: \.offset) { _, f in FindingCard(finding: f) }
+                // The scroll view keeps the minimum height of the cards out of the window minimum.
+                // A FindingCard has a fixed vertical size. At a narrow probe width, its text is very tall.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if findings.isEmpty { Text("No issues flagged.").foregroundStyle(.green) }
+                        ForEach(Array(findings.prefix(4).enumerated()), id: \.offset) { _, f in FindingCard(finding: f) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxHeight: 160)
             } label: {
                 Text("Diagnostics — \(sel?.name ?? "live") (\(findings.count))").font(.headline)
             }
