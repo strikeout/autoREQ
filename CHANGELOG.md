@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8.5
+
+- The Measure window no longer grows very tall when it shows diagnostics. The diagnostics now scroll in an area of fixed height.
+- The Measure screenshot in the README has the correct size again.
+- This is the first release after v1.0.0. The sections below list the changes of v1.1.0 to v1.8.4.
+
 ## v1.8.4
 
 - A new flow test drives each screen through its user flow on a loop-through device. `scripts/flowtest.sh` runs it with the self-test.
